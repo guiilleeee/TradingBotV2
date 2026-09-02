@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TradingBot v2</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  .stat { display: inline-block; margin-right: 32px; }
+  .stat b { display: block; font-size: 22px; }
+  .stat span { opacity: .6; font-size: 12px; text-transform: uppercase; }
+  .wrap { overflow-x: auto; margin-top: 24px; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid rgba(128,128,128,.3); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; opacity: .6; }
+  .buy { color: #14804a; } .sell { color: #b42318; } .hold { opacity: .55; }
+  td.reason { max-width: 420px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>TradingBot v2 &mdash; Fase 1</h1>
+
+<div id="stats">
+  <div class="stat"><b id="equity">&mdash;</b><span>Patrimoni total</span></div>
+  <div class="stat"><b id="count">&mdash;</b><span>Senyals</span></div>
+  <div class="stat"><b id="pnl">&mdash;</b><span>P&amp;L realitzat</span></div>
+</div>
+
+<div class="wrap"><table>
+  <thead><tr>
+    <th>Data</th><th>Simbol</th><th>Accio</th><th>Model</th><th>Conf.</th>
+    <th>Mida %</th><th>Preu</th><th>Exec.</th><th>P&amp;L</th><th>Motiu</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table></div>
+
+<script>
+// Placeholder dashboard: enough to verify the pipeline writes usable rows.
+// A proper rebuild is Phase 2.
+function parseCSV(text) {
+  const rows = []; let row = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else cell += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (c !== '\r') cell += c;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+fetch('signals.csv').then(r => r.text()).then(text => {
+  const raw = parseCSV(text.trim());
+  if (raw.length < 2) return;
+  const head = raw[0];
+  const data = raw.slice(1).map(r => Object.fromEntries(head.map((h, i) => [h, r[i]])));
+
+  // "Patrimoni total" comes off the newest row's equity, so every row written --
+  // including synthetic auto-close rows -- must carry account_equity_usd.
+  const newest = data[data.length - 1];
+  const eq = parseFloat(newest.account_equity_usd);
+  document.getElementById('equity').textContent = isFinite(eq)
+    ? '$' + eq.toLocaleString('ca-ES', { maximumFractionDigits: 2 }) : '—';
+  document.getElementById('count').textContent = data.length;
+  const pnl = data.reduce((s, r) => s + (parseFloat(r.realized_pnl_usd) || 0), 0);
+  document.getElementById('pnl').textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+
+  document.getElementById('rows').innerHTML = data.slice().reverse().map(r => `
+    <tr>
+      <td>${(r.timestamp || '').slice(0, 16).replace('T', ' ')}</td>
+      <td>${r.symbol || ''}</td>
+      <td class="${r.action || ''}">${r.action || ''}</td>
+      <td class="hold">${r.raw_action || ''}</td>
+      <td>${r.confidence ? (+r.confidence).toFixed(2) : ''}</td>
+      <td>${r.position_size_pct ? (+r.position_size_pct).toFixed(2) : ''}</td>
+      <td>${r.current_price ? (+r.current_price).toFixed(2) : ''}</td>
+      <td>${r.execution_status || ''}</td>
+      <td>${r.realized_pnl_usd ? (+r.realized_pnl_usd).toFixed(2) : ''}</td>
+      <td class="reason">${r.override_reason ? '<i>' + r.override_reason + '</i><br>' : ''}${r.reasoning || ''}</td>
+    </tr>`).join('');
+}).catch(e => {
+  document.getElementById('rows').innerHTML =
+    '<tr><td colspan="10">No s\'ha pogut carregar signals.csv: ' + e + '</td></tr>';
+});
+</script>
+</body>
+</html>
