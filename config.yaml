@@ -1,0 +1,49 @@
+# TradingBot v2 - Phase 1 (core pipeline)
+
+# Only the literal boolean `true` enables real-money trading. Anything else --
+# "true", 1, yes, a typo -- resolves to simulation. Failing safe is the point.
+live_execution: false
+
+# claude | gemini
+signal_provider: claude
+
+db_path: trading_bot.db
+csv_path: signals.csv
+
+# Starting equity for simulation, and the fallback if live balances cannot be read.
+fallback_equity_usd: 1000.0
+
+# Halt trading for the rest of the UTC day once today's realised loss reaches this
+# percentage of equity.
+circuit_breaker_loss_pct: 3.0
+
+# Percent of equity to risk per trade. Position size is derived from this and the
+# stop distance, then clamped by the absolute cap.
+max_risk_pct: 1.0
+max_absolute_position_pct: 20.0
+
+# Confidence thresholds. These are read by separate code paths -- the live path
+# cannot reach the simulation value (see mode.py).
+min_confidence_live: 0.65
+min_confidence_simulation: 0.40
+
+symbols:
+  - symbol: AAPL
+    asset_class: equity
+  - symbol: MSFT
+    asset_class: equity
+  - symbol: NVDA
+    asset_class: equity
+  # Crypto trades on Hyperliquid SPOT, unleveraged. Only symbols with a real
+  # Hyperliquid spot market can be traded -- BTC, ETH and SOL have one; BNB and
+  # XRP are perpetual-only there and would be refused by the spot guard.
+  - symbol: BTC-USD
+    asset_class: crypto
+  - symbol: ETH-USD
+    asset_class: crypto
+  - symbol: SOL-USD
+    asset_class: crypto
+
+# Feed public Hyperliquid trader-positioning into the model's reasoning as
+# directional bias. Input only: it can never bypass or shortcut risk_manager.
+use_market_positioning: true

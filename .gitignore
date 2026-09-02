@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.hl_leaderboard_cache.json
+.DS_Store
+
+# NOTE: do NOT add a blanket *.csv or *.db rule here. A blanket ignore silently
+# broke the dashboard publishing step in an earlier version -- the Actions commit
+# step copies signals.csv into docs/ and the push simply dropped it, with no error.
+# If a blanket rule is ever wanted, add targeted exceptions alongside it:
+#   *.csv
+#   !signals.csv
+#   !docs/*.csv

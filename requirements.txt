@@ -1,0 +1,9 @@
+pydantic>=2.7
+pyyaml>=6.0
+yfinance>=1.7  # 0.2.x fails against Yahoo's current API
+pandas>=2.0
+requests>=2.31
+ccxt>=4.5  # Hyperliquid spot support verified against 4.5.77
+anthropic>=1.0
+google-genai>=2.3
+pytest>=8.0
