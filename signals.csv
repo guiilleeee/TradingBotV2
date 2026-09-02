@@ -1,0 +1,1 @@
+id,timestamp,symbol,action,raw_action,confidence,position_size_pct,stop_loss_price,take_profit_price,current_price,account_equity_usd,override_reason,execution_status,fill_price,realized_pnl_usd,reasoning
