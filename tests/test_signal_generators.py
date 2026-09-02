@@ -199,3 +199,81 @@ def test_the_schema_matches_what_signal_output_requires():
     assert set(SIGNAL_JSON_SCHEMA["required"]) == set(SignalOutput.model_fields)
     assert SIGNAL_JSON_SCHEMA["additionalProperties"] is False
     assert SIGNAL_JSON_SCHEMA["properties"]["action"]["enum"] == ["buy", "sell", "hold"]
+
+
+# ------------------------------------------------ identity-linked workspace id
+
+
+def test_client_attaches_the_workspace_header(monkeypatch):
+    """The header must be on the constructed client, set from the env var alone."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_TEST123")
+
+    captured = {}
+
+    class FakeAnthropicModule:
+        @staticmethod
+        def Anthropic(**kwargs):
+            captured.update(kwargs)
+            return "client"
+
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", FakeAnthropicModule)
+
+    assert signal_generator._client() == "client"
+    assert captured["default_headers"] == {"anthropic-workspace-id": "wrkspc_TEST123"}
+
+
+def test_workspace_header_actually_reaches_an_outgoing_request(monkeypatch):
+    """End-to-end through the real SDK: the header is on the wire.
+
+    Asserting on the constructor argument alone would only prove we passed a
+    keyword the SDK happens to accept. This builds an actual request and reads
+    its headers back, so a future SDK change that stops honouring
+    `default_headers` fails here rather than in production.
+    """
+    import anthropic
+    from anthropic._models import FinalRequestOptions
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_TEST123")
+
+    client = signal_generator._client()
+    assert isinstance(client, anthropic.Anthropic)
+
+    request = client._build_request(
+        FinalRequestOptions.construct(
+            method="post",
+            url="/v1/messages",
+            json_data={"model": "m", "max_tokens": 1, "messages": []},
+        )
+    )
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    assert headers.get("anthropic-workspace-id") == "wrkspc_TEST123"
+
+
+def test_missing_workspace_id_fails_immediately_and_names_the_variable(monkeypatch):
+    # Better one clear error than Anthropic's generic 400 repeated on every
+    # symbol of every cycle, which is what this replaces.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_WORKSPACE_ID"):
+        signal_generator._client()
+
+
+def test_empty_workspace_id_is_treated_as_missing(monkeypatch):
+    # An empty GitHub secret expands to "", which would otherwise sail through
+    # and produce the exact 400 this check exists to prevent.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "")
+
+    with pytest.raises(RuntimeError, match="ANTHROPIC_WORKSPACE_ID"):
+        signal_generator._client()
+
+
+def test_an_injected_client_does_not_require_the_workspace_id(monkeypatch):
+    # Callers passing their own client (and the tests above) must not be forced
+    # to set an env var for a client they already built.
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+    out = signal_generator.generate_signal(make_input(), client=FakeAnthropic())
+    assert out.action == "buy"

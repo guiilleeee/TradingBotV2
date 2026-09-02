@@ -38,6 +38,9 @@ jobs:
         # without surfacing anywhere except the CSV.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Required alongside the key: an identity-linked API key is rejected
+          # without the anthropic-workspace-id header it supplies.
+          ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
