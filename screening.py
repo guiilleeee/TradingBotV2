@@ -9,13 +9,19 @@ here can widen or bypass either.
 Two-layer selection, mirrored across asset classes:
 
   Layer 1 (objective, no AI): liquidity. Equities are filtered by real trading
-    volume from FMP's market movers; crypto is filtered by real 24h notional
-    volume pulled directly from Hyperliquid. Hyperliquid's spot listing is
-    permissionless, so for crypto this is the actual first line of defense
-    against thin or scam tokens -- for equities, S&P 500 / Nasdaq membership
-    already excludes almost all of that, so this layer is closer to a formality.
-  Layer 2 (trending, still no AI): momentum for equities (FMP gainers/losers),
-    aggregate top-wallet positioning for crypto (market_intel.py, reused as-is).
+    volume measured directly against the S&P 500 + Nasdaq universe (yfinance,
+    one batched download -- see equity_universe.fetch_universe_price_data);
+    crypto is filtered by real 24h notional volume pulled directly from
+    Hyperliquid. Hyperliquid's spot listing is permissionless, so for crypto
+    this is the actual first line of defense against thin or scam tokens --
+    for equities, S&P 500 / Nasdaq membership already excludes almost all of
+    that, so this layer is closer to a formality.
+  Layer 2 (trending, still no AI): momentum for equities, from the same
+    yfinance batch as Layer 1's volume (an earlier version scored this from
+    FMP's whole-market gainers/losers lists, which almost never overlap a
+    curated 503-name index universe -- see equity_universe.py's module
+    docstring for the diagnosis); aggregate top-wallet positioning for crypto
+    (market_intel.py, reused as-is).
 
 Blast radius: this entire module can fail in any way and the 4h cycle is
 unaffected -- `main.load_config` falls back to whatever `symbols.yaml` (or
@@ -267,8 +273,10 @@ def run_screening(
                 f"least {EQUITY_COUNT}."
             )
 
-        movers = equity_universe.fetch_market_movers()
-        equity_scored = equity_universe.score_equities(equity_pool, movers)
+        print("  fetching universe-wide volume/momentum (one batched yfinance call)...")
+        price_data = equity_universe.fetch_universe_price_data(sorted(equity_pool))
+        print(f"  usable price data for {len(price_data)}/{len(equity_pool)} universe symbols")
+        equity_scored = equity_universe.score_equities(equity_pool, price_data)
         equity_symbols = equity_universe.select_top_equities(equity_scored, EQUITY_COUNT)
         signal_count = sum(1 for r in equity_scored if r["has_signal"])
         print(f"  {signal_count} symbols carried real volume/momentum signal this week")

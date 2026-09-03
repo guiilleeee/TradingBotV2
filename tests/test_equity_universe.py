@@ -1,13 +1,19 @@
-"""FMP integration, Wikipedia fallback, and equity scoring -- all offline.
+"""FMP integration, Wikipedia fallback, yfinance batch pricing, and equity
+scoring -- all offline.
 
 No test here touches the network. FMP calls are mocked with response shapes
 documented on FMP's own doc pages (verified via search, since every FMP
 endpoint -- including a request that would just prove a path exists -- requires
 a real key, and none is available in this environment); the Wikipedia fallback
 is exercised against a small local HTML fixture shaped like the real page's
-constituents table, not the live site.
+constituents table, not the live site. `fetch_universe_price_data`'s shape
+(MultiIndex `(symbol, field)` columns from `group_by="ticker"`, an all-NaN
+column for a delisted-shaped symbol, an empty-list call raising inside
+pandas) was verified live against yfinance 1.7.0 and the real S&P 500 list
+before writing these fakes -- see equity_universe.py's docstring.
 """
 
+import pandas as pd
 import pytest
 
 import equity_universe
@@ -170,33 +176,100 @@ def test_universe_is_the_union_of_both_indices(monkeypatch):
     assert equity_universe.build_equity_universe() == {"AAPL", "MSFT", "NVDA"}
 
 
-# ----------------------------------------------------------------- movers
+# ----------------------------------------------------------- universe pricing
 
 
-def test_market_movers_fetches_all_three_lists(monkeypatch):
-    mock_get(monkeypatch, {
-        "/stable/most-actives": [{"symbol": "AAPL", "volume": 5e7}],
-        "/stable/biggest-gainers": [{"symbol": "NVDA", "changesPercentage": 8.2}],
-        "/stable/biggest-losers": [{"symbol": "INTC", "changesPercentage": -6.1}],
+def fake_price_frame(data):
+    """{symbol: {"Close": [...], "Volume": [...]}} -> a MultiIndex DataFrame
+    shaped exactly like `yf.download(..., group_by="ticker")`'s real return
+    value (verified live -- see equity_universe.py's docstring): top-level
+    columns are symbols, second level is OHLCV field.
+    """
+    frames = {symbol: pd.DataFrame(cols) for symbol, cols in data.items()}
+    return pd.concat(frames, axis=1)
+
+
+def test_price_data_computes_change_from_the_last_two_closes_and_latest_volume(monkeypatch):
+    frame = fake_price_frame({
+        "AAPL": {"Close": [100.0, 110.0], "Volume": [1_000_000.0, 2_000_000.0]},
     })
-    movers = equity_universe.fetch_market_movers()
-    assert movers["most_actives"][0]["symbol"] == "AAPL"
-    assert movers["gainers"][0]["symbol"] == "NVDA"
-    assert movers["losers"][0]["symbol"] == "INTC"
+    monkeypatch.setattr(equity_universe.yf, "download", lambda *a, **kw: frame)
+
+    data = equity_universe.fetch_universe_price_data(["AAPL"])
+
+    assert data["AAPL"]["price_change_pct"] == pytest.approx(10.0)
+    assert data["AAPL"]["volume"] == pytest.approx(2_000_000.0)
 
 
-def test_one_mover_endpoint_failing_does_not_cost_the_others(monkeypatch):
-    def fake_get(url, params=None, timeout=None):
-        if url.endswith("/stable/biggest-gainers"):
-            raise equity_universe.requests.HTTPError("gainers down")
-        if url.endswith("/stable/most-actives"):
-            return FakeResponse([{"symbol": "AAPL", "volume": 1e7}])
-        return FakeResponse([])
+def test_price_data_never_calls_download_for_an_empty_symbol_list(monkeypatch):
+    # yf.download([]) raises inside pandas.concat rather than returning an
+    # empty frame -- confirmed live -- so an empty list must short-circuit
+    # before ever reaching yf.download at all.
+    def explode(*a, **kw):
+        raise AssertionError("must not call yf.download with no symbols")
 
-    monkeypatch.setattr(equity_universe.requests, "get", fake_get)
-    movers = equity_universe.fetch_market_movers()
-    assert movers["gainers"] == []
-    assert movers["most_actives"][0]["symbol"] == "AAPL"
+    monkeypatch.setattr(equity_universe.yf, "download", explode)
+    assert equity_universe.fetch_universe_price_data([]) == {}
+
+
+def test_price_data_drops_a_symbol_with_all_nan_data(monkeypatch):
+    # The real shape of a delisted/bad ticker mixed into a batch download:
+    # its columns exist but are entirely NaN (confirmed live).
+    import numpy as np
+
+    frame = fake_price_frame({
+        "AAPL": {"Close": [100.0, 110.0], "Volume": [1_000_000.0, 2_000_000.0]},
+        "DEADTICKER": {"Close": [np.nan, np.nan], "Volume": [np.nan, np.nan]},
+    })
+    monkeypatch.setattr(equity_universe.yf, "download", lambda *a, **kw: frame)
+
+    data = equity_universe.fetch_universe_price_data(["AAPL", "DEADTICKER"])
+
+    assert "AAPL" in data
+    assert "DEADTICKER" not in data
+
+
+def test_price_data_drops_a_symbol_missing_from_the_result_entirely(monkeypatch):
+    frame = fake_price_frame({"AAPL": {"Close": [100.0, 110.0], "Volume": [1e6, 2e6]}})
+    monkeypatch.setattr(equity_universe.yf, "download", lambda *a, **kw: frame)
+
+    data = equity_universe.fetch_universe_price_data(["AAPL", "NOTINRESULT"])
+
+    assert "NOTINRESULT" not in data
+
+
+def test_price_data_needs_at_least_two_trading_days(monkeypatch):
+    frame = fake_price_frame({"AAPL": {"Close": [100.0], "Volume": [1e6]}})
+    monkeypatch.setattr(equity_universe.yf, "download", lambda *a, **kw: frame)
+    assert equity_universe.fetch_universe_price_data(["AAPL"]) == {}
+
+
+def test_price_data_degrades_to_empty_on_a_download_exception(monkeypatch):
+    def boom(*a, **kw):
+        raise ConnectionError("yahoo is down")
+
+    monkeypatch.setattr(equity_universe.yf, "download", boom)
+    assert equity_universe.fetch_universe_price_data(["AAPL"]) == {}
+
+
+def test_price_data_returns_empty_on_a_completely_empty_frame(monkeypatch):
+    monkeypatch.setattr(equity_universe.yf, "download", lambda *a, **kw: pd.DataFrame())
+    assert equity_universe.fetch_universe_price_data(["AAPL"]) == {}
+
+
+def test_price_data_is_a_single_batched_call_not_one_per_symbol(monkeypatch):
+    calls = []
+
+    def fake_download(symbols, **kw):
+        calls.append(list(symbols))
+        return fake_price_frame({s: {"Close": [100.0, 101.0], "Volume": [1e6, 1e6]} for s in symbols})
+
+    monkeypatch.setattr(equity_universe.yf, "download", fake_download)
+    symbols = [f"SYM{i}" for i in range(50)]
+    equity_universe.fetch_universe_price_data(symbols)
+
+    assert len(calls) == 1
+    assert calls[0] == symbols
 
 
 def test_fmp_error_message_body_is_treated_as_a_failure(monkeypatch):
@@ -227,59 +300,81 @@ def test_percentile_rank_of_a_single_value_is_one():
 # --------------------------------------------------------------------- scoring
 
 
-def test_volume_below_the_floor_is_not_counted_as_signal():
+def price_data(**per_symbol):
+    """{"AAPL": (change_pct, volume), ...} -> the price_data shape score_equities takes."""
+    return {
+        symbol: {"price_change_pct": change, "volume": volume}
+        for symbol, (change, volume) in per_symbol.items()
+    }
+
+
+def test_volume_below_the_floor_is_not_counted_towards_volume_signal():
     universe = {"AAPL"}
-    movers = {"most_actives": [{"symbol": "AAPL", "volume": 1.0}], "gainers": [], "losers": []}
-    scored = equity_universe.score_equities(universe, movers)
-    assert scored[0]["has_signal"] is False
+    data = price_data(AAPL=(0.0, 1.0))  # real momentum (flat), but a tiny volume
+    scored = equity_universe.score_equities(universe, data)
+    assert scored[0]["volume"] is None  # excluded by the floor
+    # Still has_signal, though: a real (if zero) price change is itself signal
+    # now -- this is the core behavioural change over the old FMP-list gate.
+    assert scored[0]["has_signal"] is True
 
 
 def test_a_symbol_outside_the_universe_is_ignored():
     universe = {"AAPL"}
-    movers = {"most_actives": [{"symbol": "TSLA", "volume": 1e8}], "gainers": [], "losers": []}
-    scored = equity_universe.score_equities(universe, movers)
+    data = price_data(TSLA=(5.0, 1e8))
+    scored = equity_universe.score_equities(universe, data)
     assert len(scored) == 1
     assert scored[0]["symbol"] == "AAPL"
     assert scored[0]["has_signal"] is False
 
 
+def test_a_symbol_with_no_price_data_at_all_has_no_signal():
+    # The one case that should now be rare (a delisted/failed ticker in the
+    # batch, not "wasn't on someone else's movers list").
+    universe = {"AAPL", "MSFT"}
+    data = price_data(AAPL=(1.2, 5e7))
+    scored = equity_universe.score_equities(universe, data)
+    by_symbol = {r["symbol"]: r for r in scored}
+    assert by_symbol["AAPL"]["has_signal"] is True
+    assert by_symbol["MSFT"]["has_signal"] is False
+
+
 def test_volume_and_momentum_both_contribute():
     universe = {"AAPL", "MSFT", "GOOG"}
-    movers = {
-        "most_actives": [
-            {"symbol": "AAPL", "volume": 5e7},
-            {"symbol": "MSFT", "volume": 1e7},
-        ],
-        "gainers": [{"symbol": "GOOG", "changesPercentage": 9.0}],
-        "losers": [],
-    }
-    scored = equity_universe.score_equities(universe, movers)
+    data = price_data(AAPL=(0.5, 5e7), MSFT=(0.5, 1e7), GOOG=(9.0, 5e7))
+    scored = equity_universe.score_equities(universe, data)
     by_symbol = {r["symbol"]: r for r in scored}
     assert by_symbol["AAPL"]["has_signal"] is True
     assert by_symbol["MSFT"]["has_signal"] is True
     assert by_symbol["GOOG"]["has_signal"] is True
-    # AAPL has the top volume rank and no momentum; still scores above MSFT
-    # (lower volume, no momentum) because of the 0.6 volume weight.
+    # AAPL and MSFT have identical (small) momentum; AAPL's higher volume rank
+    # must be what puts it ahead, proving the volume half of the blend counts.
     assert by_symbol["AAPL"]["score"] > by_symbol["MSFT"]["score"]
 
 
 def test_a_loser_contributes_momentum_by_magnitude_not_sign():
     universe = {"AAPL", "MSFT"}
-    movers = {
-        "most_actives": [],
-        "gainers": [{"symbol": "AAPL", "changesPercentage": 5.0}],
-        "losers": [{"symbol": "MSFT", "changesPercentage": -5.0}],
-    }
-    scored = equity_universe.score_equities(universe, movers)
+    data = price_data(AAPL=(5.0, 1e7), MSFT=(-5.0, 1e7))
+    scored = equity_universe.score_equities(universe, data)
     by_symbol = {r["symbol"]: r for r in scored}
     assert by_symbol["AAPL"]["score"] == by_symbol["MSFT"]["score"]
 
 
+def test_every_symbol_with_real_data_carries_momentum_even_without_a_big_move():
+    # The core fix: momentum is no longer gated on "was this on a whole-market
+    # gainers/losers list" -- any real price change, however small, is a real
+    # relative-momentum data point once percentile-ranked against the universe.
+    universe = {"AAPL", "MSFT", "GOOG"}
+    data = price_data(AAPL=(0.01, 1e7), MSFT=(0.02, 1e7), GOOG=(0.03, 1e7))
+    scored = equity_universe.score_equities(universe, data)
+    assert all(r["has_signal"] for r in scored)
+    assert all(r["momentum_pct"] is not None for r in scored)
+
+
 def test_scoring_is_deterministic_across_repeated_calls():
     universe = {"AAPL", "MSFT", "GOOG", "TSLA"}
-    movers = {"most_actives": [], "gainers": [], "losers": []}
-    first = equity_universe.score_equities(universe, movers)
-    second = equity_universe.score_equities(universe, movers)
+    data = price_data(AAPL=(1.0, 5e7), MSFT=(-2.0, 3e7), GOOG=(0.5, 2e7), TSLA=(4.0, 9e7))
+    first = equity_universe.score_equities(universe, data)
+    second = equity_universe.score_equities(universe, data)
     assert [r["symbol"] for r in first] == [r["symbol"] for r in second]
 
 

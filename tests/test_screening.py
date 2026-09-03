@@ -337,10 +337,9 @@ def stub_equity_side(monkeypatch):
     universe = {"AAPL", "MSFT", "GOOG", "AMZN", "META", "NFLX"}
     monkeypatch.setattr(equity_universe, "build_equity_universe", lambda: universe)
     monkeypatch.setattr(
-        equity_universe, "fetch_market_movers",
-        lambda: {
-            "most_actives": [{"symbol": s, "volume": 1e7} for s in universe],
-            "gainers": [], "losers": [],
+        equity_universe, "fetch_universe_price_data",
+        lambda symbols: {
+            s: {"price_change_pct": 1.0, "volume": 1e7} for s in symbols
         },
     )
 

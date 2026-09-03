@@ -1,4 +1,4 @@
-"""Equity universe and screening signal, sourced from Financial Modeling Prep (FMP).
+"""Equity universe (Financial Modeling Prep) and screening signal (yfinance).
 
 Two things this module is careful about:
 
@@ -18,6 +18,21 @@ Two things this module is careful about:
    universe (S&P 500 only, or last week's cache) is always a safe outcome for a
    weekly screen; a crashed screening job is not allowed to be one bad HTTP call
    away, per the brief's low-blast-radius requirement.
+
+Why the Layer 1/2 signal comes from yfinance, not FMP's market movers
+-----------------------------------------------------------------------
+An earlier version scored liquidity and momentum from FMP's most-actives /
+biggest-gainers / biggest-losers endpoints, intersected with the S&P 500 +
+Nasdaq universe. Diagnosed against a real run: those endpoints work (50 real
+rows each), but they're whole-market scans dominated by small, volatile,
+non-index names (BTAI, CHPT, ADBT-shaped tickers) -- large, already-liquid
+index constituents rarely show up on a "biggest mover in the entire market"
+list. Intersecting that against 503 index names left only ~2 with any signal,
+and the other 3 of 5 selected symbols were meaningless alphabetical backfill
+presented as if they'd been chosen for a reason. That's a structural mismatch
+between the data source and the question being asked ("what's moving in OUR
+universe"), not a bug in the intersection logic -- so `fetch_universe_price_data`
+measures the universe directly instead of hoping it overlaps someone else's list.
 """
 
 from __future__ import annotations
@@ -26,15 +41,18 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Sequence, Set
 
+import pandas as pd
 import requests
+import yfinance as yf
 
 FMP_BASE_URL = "https://financialmodelingprep.com"
 HTTP_TIMEOUT = 30.0
 # Free tier is 250 requests/day (confirmed against FMP's published pricing page).
-# This module makes at most ~7 calls per run (2 constituent endpoints x up to 2
-# path attempts each, plus 3 single bulk mover calls) and this job runs weekly,
-# so the daily quota is never remotely at risk -- but a small pause between calls
-# is cheap insurance against an undocumented per-minute limit.
+# This module makes at most ~4 FMP calls per run (2 constituent endpoints x up
+# to 2 path attempts each -- volume/momentum no longer come from FMP at all,
+# see the module docstring) and this job runs weekly, so the daily quota is
+# never remotely at risk -- but a small pause between calls is cheap insurance
+# against an undocumented per-minute limit.
 INTER_CALL_DELAY_SECONDS = 0.4
 
 # A real Nasdaq-100 has ~100-105 members (multiple share classes for a couple of
@@ -113,8 +131,6 @@ def _scrape_sp500_from_wikipedia() -> List[str]:
     """
     import io
 
-    import pandas as pd
-
     resp = requests.get(
         WIKIPEDIA_SP500_URL, timeout=HTTP_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"}
     )
@@ -182,27 +198,79 @@ def fetch_nasdaq_constituents() -> List[str]:
     return []
 
 
-# --------------------------------------------------------------------- movers
+# ------------------------------------------------------------- price data
 
 
-def fetch_market_movers() -> Dict[str, List[Dict[str, Any]]]:
-    """Most-actives, biggest-gainers, biggest-losers -- three single bulk calls.
+# yfinance's own return-value contract when handed an empty ticker list is to
+# raise inside pandas.concat ("No objects to concatenate") rather than return
+# an empty frame -- confirmed live. Guarded for explicitly rather than letting
+# an empty universe (already handled upstream, but cheap to guard here too)
+# turn into a confusing pandas traceback.
+_MIN_TRADING_DAYS_FOR_MOMENTUM = 2
+PRICE_DATA_FETCH_PERIOD = "5d"
 
-    Each list is returned empty on its own failure rather than failing the
-    whole fetch, so e.g. a gainers outage doesn't also cost the volume signal
-    from most-actives.
+
+def fetch_universe_price_data(symbols: Sequence[str]) -> Dict[str, Dict[str, float]]:
+    """Real momentum and volume for the whole equity universe, one batch call.
+
+    Replaces the earlier FMP-movers-based signal (see the module docstring for
+    why): `yf.download()` accepts the full symbol list in a single request --
+    verified live against all 503 real S&P 500 tickers, ~15s, 501/503
+    returned usable data (the other 2 failed with "possibly delisted" on that
+    run despite being real, currently-listed constituents -- a real, expected
+    per-symbol failure mode at this scale, not a reason to fail the batch).
+    This is the same "one bulk call, not one per symbol" shape as
+    `screening.fetch_crypto_volumes`'s Hyperliquid call.
+
+    Returns `{symbol: {"price_change_pct": ..., "volume": ...}}` only for
+    symbols yfinance actually returned usable data for. A symbol missing from
+    the result (delisted, renamed, or a transient fetch failure inside the
+    batch) is simply absent -- callers treat that identically to "no signal
+    this week", never a crash.
     """
-    out: Dict[str, List[Dict[str, Any]]] = {}
-    for key, path in (
-        ("most_actives", "/stable/most-actives"),
-        ("gainers", "/stable/biggest-gainers"),
-        ("losers", "/stable/biggest-losers"),
-    ):
+    symbols = list(symbols)
+    if not symbols:
+        return {}
+
+    try:
+        df = yf.download(
+            symbols,
+            period=PRICE_DATA_FETCH_PERIOD,
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            auto_adjust=True,
+            threads=True,
+        )
+    except Exception:
+        return {}
+
+    if df is None or df.empty:
+        return {}
+
+    present = {c[0] for c in df.columns} if isinstance(df.columns, pd.MultiIndex) else set()
+
+    out: Dict[str, Dict[str, float]] = {}
+    for symbol in symbols:
+        if symbol not in present:
+            continue
         try:
-            data = _get(path)
-            out[key] = data if isinstance(data, list) else []
-        except Exception:
-            out[key] = []
+            close = df[symbol]["Close"].dropna()
+            volume = df[symbol]["Volume"].dropna()
+        except KeyError:
+            continue
+        if len(close) < _MIN_TRADING_DAYS_FOR_MOMENTUM or volume.empty:
+            continue
+
+        prev_close = float(close.iloc[-2])
+        if prev_close == 0:
+            continue
+
+        out[symbol] = {
+            "price_change_pct": (float(close.iloc[-1]) / prev_close - 1.0) * 100.0,
+            "volume": float(volume.iloc[-1]),
+        }
+
     return out
 
 
@@ -245,30 +313,42 @@ def percentile_ranks(values: Dict[str, float]) -> Dict[str, float]:
 
 
 def score_equities(
-    universe: Set[str], movers: Dict[str, List[Dict[str, Any]]]
+    universe: Set[str], price_data: Dict[str, Dict[str, float]]
 ) -> List[Dict[str, Any]]:
     """Rank `universe` by liquidity (Layer 1) and momentum (Layer 2).
 
-    Returns every scored candidate, highest score first -- `screening.py` takes
-    the top 5. A symbol absent from every mover list still gets a row (score
-    0.0, no signal), so the caller can always backfill toward 5 deterministically
-    rather than being left short when this week's movers barely overlap the
-    index universe.
+    `price_data` comes from `fetch_universe_price_data`, measured directly
+    against `universe` rather than intersected with someone else's list of
+    market-wide movers -- see the module docstring for why that distinction
+    is the whole fix here. Returns every scored candidate, highest score
+    first -- `screening.py` takes the top 5.
+
+    Momentum is included for *every* symbol with real price data, not just
+    ones clearing some "notable move" bar: a real, even-if-small, price change
+    is still a real relative-momentum data point once percentile-ranked
+    against the rest of the universe, and gating it would recreate the same
+    "only the loudest movers count" mismatch this replacement exists to fix.
+    Volume keeps its liquidity floor (MIN_EQUITY_VOLUME) -- that one really is
+    a "not thin enough to trust" gate, not a relative ranking.
+
+    A symbol missing from `price_data` entirely (a delisted ticker, a
+    transient fetch failure inside the batch -- both observed live, see
+    `fetch_universe_price_data`) still gets a row here (score 0.0, no
+    signal), so `select_top_equities` can backfill toward 5 deterministically
+    without ever being left short. With real universe-wide data this should
+    now be the rare exception, not most of the universe.
     """
     volume_by_symbol: Dict[str, float] = {}
-    for row in movers.get("most_actives", []):
-        symbol = str(row.get("symbol", "")).strip().upper()
-        volume = row.get("volume")
-        if symbol in universe and isinstance(volume, (int, float)) and volume >= MIN_EQUITY_VOLUME:
-            volume_by_symbol[symbol] = float(volume)
-
     momentum_by_symbol: Dict[str, float] = {}
-    for source in ("gainers", "losers"):
-        for row in movers.get(source, []):
-            symbol = str(row.get("symbol", "")).strip().upper()
-            pct = row.get("changesPercentage")
-            if symbol in universe and isinstance(pct, (int, float)):
-                momentum_by_symbol[symbol] = max(momentum_by_symbol.get(symbol, 0.0), abs(float(pct)))
+    for symbol, data in price_data.items():
+        if symbol not in universe:
+            continue
+        volume = data.get("volume")
+        if isinstance(volume, (int, float)) and volume >= MIN_EQUITY_VOLUME:
+            volume_by_symbol[symbol] = float(volume)
+        pct = data.get("price_change_pct")
+        if isinstance(pct, (int, float)):
+            momentum_by_symbol[symbol] = abs(float(pct))
 
     volume_pct = percentile_ranks(volume_by_symbol)
     momentum_pct = percentile_ranks(momentum_by_symbol)
@@ -294,8 +374,10 @@ def score_equities(
 def select_top_equities(scored: Sequence[Dict[str, Any]], count: int) -> List[str]:
     """Top `count` symbols: signal-bearing candidates first, then a deterministic
     backfill from the rest of the universe if fewer than `count` have any signal
-    at all this week (a near-empty overlap with this week's movers, not a reason
-    to hand the model fewer than the requested slate).
+    at all this week (e.g. a handful of delisted/failed tickers in the batch
+    fetch, not a reason to hand the model fewer than the requested slate --
+    see fetch_universe_price_data for why this should now be a rare exception
+    rather than most of the universe).
     """
     with_signal = [r for r in scored if r["has_signal"]]
     without_signal = [r for r in scored if not r["has_signal"]]
