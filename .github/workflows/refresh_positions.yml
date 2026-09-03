@@ -1,0 +1,63 @@
+name: Refresh position prices
+
+on:
+  schedule:
+    # Every 15 minutes. This is a plain price refresh for the dashboard's holdings
+    # list -- no AI calls, no signal generation, no trading logic -- completely
+    # separate from and far cheaper than trading_bot.yml's 4h cycle. It exists so
+    # the dashboard can feel live without paying for a model call on every refresh.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-positions
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Refresh positions.json (price-only, no AI calls)
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          HYPERLIQUID_WALLET_ADDRESS: ${{ secrets.HYPERLIQUID_WALLET_ADDRESS }}
+          HYPERLIQUID_PRIVATE_KEY: ${{ secrets.HYPERLIQUID_PRIVATE_KEY }}
+        run: python position_metrics.py --config config.yaml
+
+      - name: Publish
+        run: |
+          mkdir -p docs
+          cp positions.json docs/positions.json
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f docs/positions.json positions.json
+          if git diff --staged --quiet; then
+            echo "Nothing changed this refresh."
+          else
+            git commit -m "chore: position price refresh [skip ci]"
+            # This job runs far more often than trading_bot.yml's 4h cycle, so a
+            # push race between the two is the realistic case, not the exception --
+            # rebase onto whatever landed since checkout before pushing. A failure
+            # here just means this refresh is skipped; the next one is 15 minutes away.
+            git pull --rebase origin main
+            git push
+          fi

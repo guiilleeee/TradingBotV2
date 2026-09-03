@@ -239,6 +239,72 @@ def test_csv_export_flattens_the_blobs(tmp_logger, tmp_path):
     assert rows[0]["raw_action"] == "buy"
 
 
+def test_csv_export_labels_mode_from_is_live_and_leaves_it_blank_when_unknown(tmp_logger, tmp_path):
+    tmp_logger.log_signal("AAPL", signal_input(), None, trade_signal(), is_live=True)
+    tmp_logger.log_signal("AAPL", signal_input(), None, trade_signal(), is_live=False)
+    tmp_logger.log_signal("AAPL", signal_input(), None, trade_signal())  # is_live omitted
+
+    path = tmp_path / "signals.csv"
+    tmp_logger.export_signals_csv(str(path))
+    with open(path, newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert [r["mode"] for r in rows] == ["REAL", "SIMULACIO", ""]
+
+
+def test_csv_export_labels_auto_close_mode_too(tmp_logger, tmp_path):
+    tmp_logger.log_auto_close_signal(
+        "AAPL", "Stop-loss activat", 92.0, 2.0, -16.0, 984.0, is_live=True
+    )
+
+    path = tmp_path / "signals.csv"
+    tmp_logger.export_signals_csv(str(path))
+    with open(path, newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows[0]["mode"] == "REAL"
+
+
+def test_a_db_created_before_is_live_existed_still_opens_and_exports(tmp_path):
+    """Regression test for the is_live migration: an old db file, with a signals
+    table that predates the column, must not crash BotLogger.__init__ or reads.
+    """
+    db_path = tmp_path / "old.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE signals (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp        TEXT NOT NULL,
+            symbol           TEXT NOT NULL,
+            signal_input     TEXT,
+            raw_output       TEXT,
+            final_signal     TEXT,
+            override_reason  TEXT,
+            execution_result TEXT
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO signals (timestamp, symbol, signal_input, raw_output, final_signal, "
+        "override_reason, execution_result) VALUES ('2026-01-01T00:00:00+00:00', 'AAPL', "
+        "'{}', '{}', '{\"action\": \"hold\"}', NULL, '{}')"
+    )
+    conn.commit()
+    conn.close()
+
+    from logger import BotLogger
+
+    migrated = BotLogger(str(db_path))
+    csv_path = tmp_path / "out.csv"
+    count = migrated.export_signals_csv(str(csv_path))
+    assert count == 1
+
+    with open(csv_path, newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["mode"] == ""  # pre-migration row: mode honestly unknown
+
+
 def test_csv_export_handles_an_empty_database(tmp_logger, tmp_path):
     path = tmp_path / "signals.csv"
     assert tmp_logger.export_signals_csv(str(path)) == 0

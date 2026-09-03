@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import data_fetcher
 import execution
 import market_intel
+import position_metrics
 import risk_manager
 import telegram_alerts
 from logger import BotLogger
@@ -317,6 +318,7 @@ def _run_cycle_body(config: Dict[str, Any], is_live: bool) -> int:
             qty=closure.qty,
             pnl=closure.pnl,
             equity=equity,
+            is_live=is_live,
         )
         telegram_alerts.send_auto_close_alert(is_live, closure.symbol, closure.reason, closure.pnl)
 
@@ -364,6 +366,20 @@ def _run_cycle_body(config: Dict[str, Any], is_live: bool) -> int:
     csv_path = config.get("csv_path", "signals.csv")
     rows = bot_logger.export_signals_csv(csv_path)
     print(f"Exported {rows} signal rows to {csv_path}")
+
+    # Holdings-list data for the dashboard: open positions only, never the full
+    # screening universe. Soft-fail like every other dashboard-facing export here --
+    # a broken return calculation or a broker hiccup must not fail the cycle itself.
+    try:
+        positions_path = config.get("positions_path", position_metrics.DEFAULT_POSITIONS_PATH)
+        position_rows = position_metrics.compute_position_metrics(
+            bot_logger, config, is_live, infer_asset_class
+        )
+        position_metrics.export_positions_json(position_rows, positions_path, is_live=is_live)
+        print(f"Exported {len(position_rows)} open positions to {positions_path}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"positions.json export failed (non-fatal): {type(exc).__name__}: {exc}")
+
     return 0
 
 
@@ -434,7 +450,7 @@ def _process_symbol(
             ),
             raw_action="hold",
         )
-        bot_logger.log_signal(symbol, signal_input, None, blocked, None)
+        bot_logger.log_signal(symbol, signal_input, None, blocked, None, is_live=is_live)
         print(f"- {symbol}: circuit breaker tripped ({today_loss_pct:.2f}%); skipped")
         return
 
@@ -461,7 +477,7 @@ def _process_symbol(
             existing_position=existing_position,
         )
 
-    bot_logger.log_signal(symbol, signal_input, raw, final, exec_result)
+    bot_logger.log_signal(symbol, signal_input, raw, final, exec_result, is_live=is_live)
 
     if exec_result and exec_result.status in ("success", "dry_run"):
         if exec_result.realized_pnl_usd is not None:

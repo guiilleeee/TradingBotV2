@@ -9,6 +9,7 @@ signal_provider: claude
 
 db_path: trading_bot.db
 csv_path: signals.csv
+positions_path: positions.json
 
 # Starting equity for simulation, and the fallback if live balances cannot be read.
 fallback_equity_usd: 1000.0

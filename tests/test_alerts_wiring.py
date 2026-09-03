@@ -35,6 +35,7 @@ def write_config(tmp_path, **overrides):
     config.update(overrides)
     config["db_path"] = str(tmp_path / "cycle.db")
     config["csv_path"] = str(tmp_path / "signals.csv")
+    config["positions_path"] = str(tmp_path / "positions.json")
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(config), encoding="utf-8")
     return path, config

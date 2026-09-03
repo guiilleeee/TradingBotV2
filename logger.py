@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS signals (
     raw_output       TEXT,
     final_signal     TEXT,
     override_reason  TEXT,
-    execution_result TEXT
+    execution_result TEXT,
+    is_live          INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS pnl (
@@ -85,6 +86,20 @@ class BotLogger:
         self.db_path = db_path
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate_is_live_column(conn)
+
+    def _migrate_is_live_column(self, conn: sqlite3.Connection) -> None:
+        """Add `signals.is_live`, once, for a db created before this column existed.
+
+        CREATE TABLE IF NOT EXISTS never adds a column to an existing table, so a
+        db from before the dashboard's SIMULACIO/REAL row labeling needed this has
+        to be migrated explicitly. Every row written before this migration reads
+        back with is_live NULL -- an honest "mode unknown for this old row", never
+        guessed.
+        """
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(signals)")}
+        if "is_live" not in columns:
+            conn.execute("ALTER TABLE signals ADD COLUMN is_live INTEGER")
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -105,11 +120,19 @@ class BotLogger:
         raw_output: Optional[SignalOutput],
         final_signal: Optional[TradeSignal],
         execution_result: Optional[ExecutionResult] = None,
+        is_live: Optional[bool] = None,
     ) -> int:
+        """`is_live` is optional (defaults to None, i.e. "mode unknown") purely so
+        every existing call site that predates this field keeps working unchanged.
+        main.py always passes it explicitly -- see run_cycle -- so it is only ever
+        None for rows logged before this field existed, or via a caller that has
+        deliberately chosen not to record it.
+        """
         with self._conn() as conn:
             cur = conn.execute(
                 "INSERT INTO signals (timestamp, symbol, signal_input, raw_output, "
-                "final_signal, override_reason, execution_result) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "final_signal, override_reason, execution_result, is_live) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     utc_now_iso(),
                     symbol,
@@ -118,6 +141,7 @@ class BotLogger:
                     _dump(final_signal),
                     final_signal.override_reason if final_signal else None,
                     _dump(execution_result),
+                    None if is_live is None else int(is_live),
                 ),
             )
             return int(cur.lastrowid or 0)
@@ -130,6 +154,7 @@ class BotLogger:
         qty: float,
         pnl: float,
         equity: float,
+        is_live: Optional[bool] = None,
     ) -> int:
         """Write a synthetic signal row for a stop-loss / take-profit auto-close.
 
@@ -173,7 +198,8 @@ class BotLogger:
         with self._conn() as conn:
             cur = conn.execute(
                 "INSERT INTO signals (timestamp, symbol, signal_input, raw_output, "
-                "final_signal, override_reason, execution_result) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "final_signal, override_reason, execution_result, is_live) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     utc_now_iso(),
                     symbol,
@@ -182,6 +208,7 @@ class BotLogger:
                     json.dumps(final_signal),
                     "automatic exit",
                     json.dumps(execution_result),
+                    None if is_live is None else int(is_live),
                 ),
             )
             return int(cur.lastrowid or 0)
@@ -335,6 +362,9 @@ class BotLogger:
             "fill_price",
             "realized_pnl_usd",
             "reasoning",
+            "recent_headlines",
+            "market_positioning",
+            "mode",
         ]
 
         with open(path, "w", newline="", encoding="utf-8") as handle:
@@ -362,6 +392,19 @@ class BotLogger:
                         "fill_price": execution.get("fill_price"),
                         "realized_pnl_usd": execution.get("realized_pnl_usd"),
                         "reasoning": final.get("reasoning"),
+                        # json.dumps, not the raw list/None -- CSV has no native list
+                        # type, and the dashboard's Analisi tab JSON.parses this back.
+                        "recent_headlines": json.dumps(inp.get("recent_headlines") or []),
+                        "market_positioning": inp.get("market_positioning"),
+                        # Plain text, no emoji -- the dashboard applies its own color
+                        # coding. NULL (row logged before this field existed, or a
+                        # caller that chose not to record it) exports as "", never a
+                        # guessed mode -- see BotLogger.log_signal's is_live docstring.
+                        "mode": (
+                            "REAL" if row["is_live"] == 1
+                            else "SIMULACIO" if row["is_live"] == 0
+                            else ""
+                        ),
                     }
                 )
         return len(rows)
