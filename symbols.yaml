@@ -1,20 +1,20 @@
 # Generated weekly by screening.py -- do not hand-edit, it is overwritten every run.
 # Contributes ONLY the `symbols` list to the 4h cycle; every risk parameter, threshold, and provider setting stays in config.yaml.
-generated_at: '2026-09-03T14:41:34.500413+00:00'
+generated_at: '2026-09-03T21:54:31.008380+00:00'
 symbols:
 - symbol: HOOD
   asset_class: equity
-- symbol: CIEN
+- symbol: HPE
   asset_class: equity
-- symbol: ZTS
+- symbol: PLTR
   asset_class: equity
-- symbol: ZBRA
+- symbol: TSLA
   asset_class: equity
-- symbol: ZBH
+- symbol: PCG
   asset_class: equity
-- symbol: ETH-USD
-  asset_class: crypto
 - symbol: BTC-USD
+  asset_class: crypto
+- symbol: ETH-USD
   asset_class: crypto
 - symbol: HYPE-USD
   asset_class: crypto
@@ -25,23 +25,23 @@ symbols:
 scores:
   equity:
     HOOD:
-      score: 0.4
-    CIEN:
-      score: 0.0
-    ZTS:
-      score: 0.0
-    ZBRA:
-      score: 0.0
-    ZBH:
-      score: 0.0
+      score: 0.9928
+    HPE:
+      score: 0.9888
+    PLTR:
+      score: 0.988
+    TSLA:
+      score: 0.9872
+    PCG:
+      score: 0.9852
   crypto:
-    ETH-USD:
-      score: 0.9333
     BTC-USD:
-      score: 0.9167
+      score: 0.9256
+    ETH-USD:
+      score: 0.91
     HYPE-USD:
-      score: 0.9
+      score: 0.8667
     ZEC-USD:
-      score: 0.7167
+      score: 0.8511
     SOL-USD:
-      score: 0.6333
+      score: 0.7022
