@@ -23,21 +23,46 @@ import data_fetcher
 import execution
 import market_intel
 import risk_manager
+import telegram_alerts
 from logger import BotLogger
 from mode import ModeSettings, resolve_is_live, resolve_mode_settings
 from models import AssetClass, ExistingPosition, SignalInput, TradeSignal
 
 DEFAULT_CONFIG_PATH = "config.yaml"
+DEFAULT_SYMBOLS_PATH = "symbols.yaml"
 
 
 # --------------------------------------------------------------------- config
 
 
-def load_config(path: str = DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
+def load_config(
+    path: str = DEFAULT_CONFIG_PATH, symbols_path: str = DEFAULT_SYMBOLS_PATH
+) -> Dict[str, Any]:
+    """Load config.yaml, then let symbols.yaml (if present) override its symbol list.
+
+    This is a one-way, single-key merge on purpose: symbols_path can only ever
+    replace the `symbols` key, never anything else. The weekly screening job that
+    writes symbols.yaml has no way to touch risk parameters, thresholds, or
+    provider settings even if its own logic were somehow wrong -- that guarantee
+    holds structurally here, not by convention in screening.py.
+
+    A missing or empty symbols.yaml is not an error: config.yaml's own `symbols`
+    (hand-tuned, checked into the repo) stands in for it, so the 4h cycle never
+    ends up with nothing to trade because the weekly job hasn't run yet, or broke.
+    """
     import yaml  # imported here so importing this module needs no config deps
 
     with open(path, "r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
+        config = yaml.safe_load(handle) or {}
+
+    if os.path.exists(symbols_path):
+        with open(symbols_path, "r", encoding="utf-8") as handle:
+            screened = yaml.safe_load(handle) or {}
+        screened_symbols = screened.get("symbols")
+        if screened_symbols:
+            config["symbols"] = screened_symbols
+
+    return config
 
 
 def infer_asset_class(symbol: str, config: Dict[str, Any]) -> AssetClass:
@@ -83,6 +108,28 @@ class SweepResult:
     closed_symbols: Set[str] = field(default_factory=set)
     closures: List[Closure] = field(default_factory=list)
     unrealized_pnl: float = 0.0
+
+
+@dataclass
+class CircuitBreakerTracker:
+    """Tracks whether the circuit breaker alert has already been sent.
+
+    "Tripping" is the transition from not-tripped to tripped, not the tripped
+    state itself. `already_tripped_at_cycle_start` is computed once, before any
+    symbol is processed, from the same persisted realised-P&L data every other
+    circuit-breaker check already reads -- so a breaker still tripped from an
+    earlier cycle *today* (UTC) correctly sends no new alert, while a breaker
+    that trips for the first time mid-cycle sends exactly one.
+    """
+
+    already_tripped_at_cycle_start: bool
+    alerted_this_cycle: bool = False
+
+    def note_tripped(self, is_live: bool, today_loss_pct: float, threshold_pct: float) -> None:
+        if self.already_tripped_at_cycle_start or self.alerted_this_cycle:
+            return
+        telegram_alerts.send_circuit_breaker_alert(is_live, today_loss_pct, threshold_pct)
+        self.alerted_this_cycle = True
 
 
 def sweep_open_positions(
@@ -186,9 +233,28 @@ def sweep_open_positions(
 # ----------------------------------------------------------------------- cycle
 
 
-def run_cycle(config_path: str = DEFAULT_CONFIG_PATH) -> int:
-    config = load_config(config_path)
-    is_live = resolve_is_live(config)
+def run_cycle(
+    config_path: str = DEFAULT_CONFIG_PATH, symbols_path: str = DEFAULT_SYMBOLS_PATH
+) -> int:
+    # Safe default for the failure alert's mode label if resolution itself
+    # fails before is_live is known -- mirrors mode.py's own philosophy
+    # ("failing safe is the point"), applied here to a notification rather
+    # than a trading decision. Updated below the instant the real value is
+    # known, so a failure any time after that point alerts with the true mode.
+    is_live = False
+    try:
+        config = load_config(config_path, symbols_path)
+        is_live = resolve_is_live(config)
+        return _run_cycle_body(config, is_live)
+    except Exception as exc:
+        # A cycle-level failure -- distinct from a single symbol's
+        # _process_symbol call raising, which is already caught in the
+        # per-symbol loop below and never reaches this level.
+        telegram_alerts.send_cycle_failure_alert(is_live, f"{type(exc).__name__}: {exc}")
+        raise
+
+
+def _run_cycle_body(config: Dict[str, Any], is_live: bool) -> int:
     settings: ModeSettings = resolve_mode_settings(is_live, config)
 
     bot_logger = BotLogger(config.get("db_path", "trading_bot.db"))
@@ -230,9 +296,20 @@ def run_cycle(config_path: str = DEFAULT_CONFIG_PATH) -> int:
             pnl=closure.pnl,
             equity=equity,
         )
+        telegram_alerts.send_auto_close_alert(is_live, closure.symbol, closure.reason, closure.pnl)
 
     print(f"Equity: ${equity:,.2f}  (auto-closed this cycle: "
           f"{sorted(sweep.closed_symbols) or 'none'})")
+
+    # The breaker's state as of *before* any symbol in this cycle is processed.
+    # Passed into _process_symbol via the tracker so the alert fires exactly
+    # once, on the transition into the tripped state -- never for a breaker
+    # already tripped entering this cycle, never once per symbol afterward.
+    breaker_tracker = CircuitBreakerTracker(
+        already_tripped_at_cycle_start=(
+            bot_logger.get_today_realized_loss_pct(equity) <= -abs(circuit_breaker_loss_pct)
+        )
+    )
 
     # --- per symbol -------------------------------------------------------
     for entry in config.get("symbols", []) or []:
@@ -255,6 +332,7 @@ def run_cycle(config_path: str = DEFAULT_CONFIG_PATH) -> int:
                 circuit_breaker_loss_pct=circuit_breaker_loss_pct,
                 max_risk_pct=max_risk_pct,
                 max_absolute_position_pct=max_absolute_position_pct,
+                breaker_tracker=breaker_tracker,
             )
         except Exception as exc:  # noqa: BLE001 - one symbol never kills the cycle
             print(f"- {symbol}: FAILED: {type(exc).__name__}: {exc}")
@@ -278,6 +356,7 @@ def _process_symbol(
     circuit_breaker_loss_pct: float,
     max_risk_pct: float,
     max_absolute_position_pct: float,
+    breaker_tracker: CircuitBreakerTracker,
 ) -> None:
     is_live = settings.is_live
 
@@ -314,6 +393,8 @@ def _process_symbol(
     if today_loss_pct <= -abs(circuit_breaker_loss_pct):
         # Breaker is already tripped, so skip the model call entirely -- there is
         # no decision it could return that we would act on, and it costs money.
+        # The alert itself only actually sends once -- see CircuitBreakerTracker.
+        breaker_tracker.note_tripped(is_live, today_loss_pct, circuit_breaker_loss_pct)
         blocked = TradeSignal(
             symbol=symbol,
             action="hold",
@@ -367,6 +448,16 @@ def _process_symbol(
 
         _update_ledger(bot_logger, final, exec_result, current_price, is_live)
 
+        telegram_alerts.send_trade_alert(
+            is_live=is_live,
+            symbol=symbol,
+            action=final.action,
+            size_pct=final.position_size_pct,
+            price=float(exec_result.fill_price or current_price),
+            confidence=final.confidence,
+            reasoning=final.reasoning,
+        )
+
     print(
         f"- {symbol}: {final.raw_action} -> {final.action} "
         f"(conf {final.confidence:.2f}, size {final.position_size_pct:.2f}%)"
@@ -411,8 +502,11 @@ def _update_ledger(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run one TradingBot cycle.")
     parser.add_argument("--config", default=os.environ.get("BOT_CONFIG", DEFAULT_CONFIG_PATH))
+    parser.add_argument(
+        "--symbols", default=os.environ.get("BOT_SYMBOLS", DEFAULT_SYMBOLS_PATH)
+    )
     args = parser.parse_args()
-    return run_cycle(args.config)
+    return run_cycle(args.config, args.symbols)
 
 
 if __name__ == "__main__":

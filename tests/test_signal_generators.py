@@ -277,3 +277,91 @@ def test_an_injected_client_does_not_require_the_workspace_id(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
     out = signal_generator.generate_signal(make_input(), client=FakeAnthropic())
     assert out.action == "buy"
+
+
+# ---------------------------------------------------------- token usage (backtest.py)
+
+
+class FakeUsage:
+    def __init__(self, input_tokens, output_tokens):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class FakeAnthropicWithUsage(FakeAnthropic):
+    def __init__(self, *a, input_tokens=120, output_tokens=45, **kw):
+        super().__init__(*a, **kw)
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
+
+    def create(self, **kwargs):
+        message = super().create(**kwargs)
+        message.usage = FakeUsage(self._input_tokens, self._output_tokens)
+        return message
+
+
+def test_claude_generate_signal_discards_usage_but_still_works():
+    client = FakeAnthropicWithUsage()
+    out = signal_generator.generate_signal(make_input(), client=client)
+    assert out.action == "buy"
+
+
+def test_claude_with_usage_returns_real_token_counts():
+    client = FakeAnthropicWithUsage(input_tokens=500, output_tokens=80)
+    out, usage = signal_generator.generate_signal_with_usage(make_input(), client=client)
+    assert out.action == "buy"
+    assert usage.input_tokens == 500
+    assert usage.output_tokens == 80
+
+
+def test_claude_with_usage_degrades_to_zero_when_the_fake_has_no_usage_attr():
+    # A fake client (or a real response shape change) with no .usage attribute
+    # at all must not raise -- it degrades to zero, same fail-soft posture as
+    # everything else optional in this project.
+    client = FakeAnthropic()  # no .usage set anywhere
+    out, usage = signal_generator.generate_signal_with_usage(make_input(), client=client)
+    assert out.action == "buy"
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 0
+
+
+class FakeGeminiUsage:
+    def __init__(self, prompt_token_count, candidates_token_count):
+        self.prompt_token_count = prompt_token_count
+        self.candidates_token_count = candidates_token_count
+
+
+class FakeGeminiWithUsage(FakeGemini):
+    def __init__(self, *a, prompt_tokens=90, candidates_tokens=30, **kw):
+        super().__init__(*a, **kw)
+        self._prompt_tokens = prompt_tokens
+        self._candidates_tokens = candidates_tokens
+
+    def generate_content(self, **kwargs):
+        response = super().generate_content(**kwargs)
+        response.usage_metadata = FakeGeminiUsage(self._prompt_tokens, self._candidates_tokens)
+        return response
+
+
+def test_gemini_with_usage_returns_real_token_counts():
+    client = FakeGeminiWithUsage(prompt_tokens=400, candidates_tokens=60)
+    out, usage = signal_generator_gemini.generate_signal_with_usage(make_input(), client=client)
+    assert out.action == "buy"
+    assert usage.input_tokens == 400
+    assert usage.output_tokens == 60
+
+
+def test_gemini_with_usage_degrades_to_zero_when_the_fake_has_no_usage_metadata():
+    client = FakeGemini()  # no .usage_metadata set anywhere
+    out, usage = signal_generator_gemini.generate_signal_with_usage(make_input(), client=client)
+    assert out.action == "buy"
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 0
+
+
+def test_both_providers_expose_the_same_with_usage_signature():
+    import inspect
+
+    claude_params = list(inspect.signature(signal_generator.generate_signal_with_usage).parameters)
+    gemini_params = list(inspect.signature(signal_generator_gemini.generate_signal_with_usage).parameters)
+    assert claude_params == gemini_params

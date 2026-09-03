@@ -2,6 +2,7 @@ pydantic>=2.7
 pyyaml>=6.0
 yfinance>=1.7  # 0.2.x fails against Yahoo's current API
 pandas>=2.0
+lxml>=5.0  # parser backend for pandas.read_html (Wikipedia S&P 500 fallback)
 requests>=2.31
 ccxt>=4.5  # Hyperliquid spot support verified against 4.5.77
 anthropic>=1.0

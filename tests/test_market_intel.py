@@ -95,7 +95,7 @@ def test_aggregate_splits_long_and_short_notional(monkeypatch):
         "0xa": state(("BTC", 1.0, 100_000), ("ETH", -2.0, 50_000)),
         "0xb": state(("BTC", 0.5, 40_000)),
     }
-    monkeypatch.setattr(market_intel, "_post_info", lambda body: responses[body["user"]])
+    monkeypatch.setattr(market_intel, "post_info", lambda body: responses[body["user"]])
 
     totals = market_intel.aggregate_positioning([("0xa", 1.0), ("0xb", 0.5)])
     assert totals["BTC"]["long"] == pytest.approx(140_000)
@@ -110,14 +110,14 @@ def test_a_failing_wallet_is_skipped_not_fatal(monkeypatch):
             raise RuntimeError("timeout")
         return state(("BTC", 1.0, 100_000))
 
-    monkeypatch.setattr(market_intel, "_post_info", flaky)
+    monkeypatch.setattr(market_intel, "post_info", flaky)
     totals = market_intel.aggregate_positioning([("0xbad", 1.0), ("0xok", 0.5)])
     assert totals["BTC"]["long"] == pytest.approx(100_000)
     assert totals["BTC"]["sampled_wallets"] == 1  # only one actually answered
 
 
 def test_zero_size_positions_are_ignored(monkeypatch):
-    monkeypatch.setattr(market_intel, "_post_info", lambda body: state(("BTC", 0.0, 100_000)))
+    monkeypatch.setattr(market_intel, "post_info", lambda body: state(("BTC", 0.0, 100_000)))
     assert market_intel.aggregate_positioning([("0xa", 1.0)]) == {}
 
 
@@ -210,7 +210,7 @@ def test_positioning_end_to_end_with_stubs(monkeypatch):
         lambda cache_path: [leaderboard_row("0xa", 1_000_000, 0.9)],
     )
     monkeypatch.setattr(
-        market_intel, "_post_info", lambda body: state(("BTC", 1.0, 900_000))
+        market_intel, "post_info", lambda body: state(("BTC", 1.0, 900_000))
     )
     monkeypatch.setattr(market_intel, "fetch_funding_rate", lambda coin: 0.0000125)
 

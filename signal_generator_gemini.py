@@ -8,9 +8,9 @@ transport differs.
 from __future__ import annotations
 
 import os
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
-from models import SignalInput, SignalOutput, parse_signal_output
+from models import SignalInput, SignalOutput, TokenUsage, parse_signal_output
 from prompts import SIGNAL_JSON_SCHEMA, SYSTEM_PROMPT, build_user_prompt
 
 # Verified against the live Gemini model list at build time rather than recalled --
@@ -38,7 +38,32 @@ def generate_signal(
     model: str = DEFAULT_MODEL,
     client: Optional[Any] = None,
 ) -> SignalOutput:
-    """Ask Gemini for one decision on one symbol."""
+    """Ask Gemini for one decision on one symbol.
+
+    Thin wrapper over generate_signal_with_usage that discards token usage --
+    kept as the stable public entry point so nothing about its behaviour or
+    signature changes for any existing caller.
+    """
+    output, _usage = generate_signal_with_usage(
+        signal_input, system_prompt=system_prompt, model=model, client=client
+    )
+    return output
+
+
+def generate_signal_with_usage(
+    signal_input: SignalInput,
+    system_prompt: str = SYSTEM_PROMPT,
+    model: str = DEFAULT_MODEL,
+    client: Optional[Any] = None,
+) -> Tuple[SignalOutput, TokenUsage]:
+    """Same call as generate_signal, but also returns token usage.
+
+    Exists for backtest.py's cost tracking. Verified against the installed SDK
+    (google-genai): usage lives on `response.usage_metadata`, with
+    `prompt_token_count` / `candidates_token_count` -- not `.usage.input_tokens`
+    the way Claude's response shapes it. Extraction is defensive so a fake
+    client in a test that never sets `usage_metadata` degrades to zero.
+    """
     from google.genai import types
 
     client = client or _client()
@@ -70,4 +95,11 @@ def generate_signal(
             ),
         )
 
-    return parse_signal_output(getattr(response, "text", "") or "", signal_input.symbol)
+    output = parse_signal_output(getattr(response, "text", "") or "", signal_input.symbol)
+
+    usage_obj = getattr(response, "usage_metadata", None)
+    usage = TokenUsage(
+        input_tokens=getattr(usage_obj, "prompt_token_count", None) or 0,
+        output_tokens=getattr(usage_obj, "candidates_token_count", None) or 0,
+    )
+    return output, usage

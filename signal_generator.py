@@ -9,9 +9,9 @@ mutated.
 from __future__ import annotations
 
 import os
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
-from models import SignalInput, SignalOutput, parse_signal_output
+from models import SignalInput, SignalOutput, TokenUsage, parse_signal_output
 from prompts import SIGNAL_JSON_SCHEMA, SYSTEM_PROMPT, build_user_prompt
 
 # Verified against current Anthropic model documentation at build time rather than
@@ -66,7 +66,33 @@ def generate_signal(
     model: str = DEFAULT_MODEL,
     client: Optional[Any] = None,
 ) -> SignalOutput:
-    """Ask Claude for one decision on one symbol."""
+    """Ask Claude for one decision on one symbol.
+
+    Thin wrapper over generate_signal_with_usage that discards token usage --
+    the live 4h cycle (main.py) has no use for it. Kept as the stable public
+    entry point so nothing about its behaviour or signature changes for any
+    existing caller.
+    """
+    output, _usage = generate_signal_with_usage(
+        signal_input, system_prompt=system_prompt, model=model, client=client
+    )
+    return output
+
+
+def generate_signal_with_usage(
+    signal_input: SignalInput,
+    system_prompt: str = SYSTEM_PROMPT,
+    model: str = DEFAULT_MODEL,
+    client: Optional[Any] = None,
+) -> Tuple[SignalOutput, TokenUsage]:
+    """Same call as generate_signal, but also returns token usage.
+
+    Exists for backtest.py's cost tracking, which needs real per-call counts
+    to report actual (not just estimated) spend as a long run progresses.
+    Usage extraction is defensive (`getattr` all the way down) so a fake
+    client in a test that never sets `.usage` degrades to zero rather than
+    raising -- this function must never be the reason a test fixture breaks.
+    """
     client = client or _client()
 
     response = client.messages.create(
@@ -93,4 +119,11 @@ def generate_signal(
         )
 
     text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), "")
-    return parse_signal_output(text, signal_input.symbol)
+    output = parse_signal_output(text, signal_input.symbol)
+
+    usage_obj = getattr(response, "usage", None)
+    usage = TokenUsage(
+        input_tokens=getattr(usage_obj, "input_tokens", None) or 0,
+        output_tokens=getattr(usage_obj, "output_tokens", None) or 0,
+    )
+    return output, usage

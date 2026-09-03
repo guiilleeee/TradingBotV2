@@ -112,6 +112,22 @@ class SignalOutput(BaseModel):
         return self
 
 
+class TokenUsage(BaseModel):
+    """Token counts from one provider call.
+
+    Not needed by the live 4h cycle (main.py never reads this), but backtest.py
+    needs real per-call usage to report an accurate running/actual cost rather
+    than an estimate that never gets corrected. Kept as a plain counts holder --
+    pricing tables and cost math belong to whoever is paying, not to the
+    provider modules.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+
+
 class TradeSignal(SignalOutput):
     """Post-risk-manager signal. This is what execution acts on."""
 

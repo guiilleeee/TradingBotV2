@@ -51,7 +51,7 @@ MIN_ACCOUNT_VALUE_USD = 100_000.0
 MIN_TOTAL_NOTIONAL_USD = 50_000.0
 
 
-def _post_info(body: Dict[str, Any]) -> Any:
+def post_info(body: Dict[str, Any]) -> Any:
     resp = requests.post(INFO_URL, json=body, timeout=HTTP_TIMEOUT, headers=_HEADERS)
     resp.raise_for_status()
     return resp.json()
@@ -144,7 +144,7 @@ def aggregate_positioning(wallets: List[Tuple[str, float]]) -> Dict[str, Dict[st
 
     for address, _roi in wallets:
         try:
-            state = _post_info({"type": "clearinghouseState", "user": address})
+            state = post_info({"type": "clearinghouseState", "user": address})
         except Exception:
             continue
 
@@ -183,7 +183,7 @@ def fetch_funding_rate(coin: str) -> Optional[float]:
     Positive funding means longs are paying shorts, i.e. the crowd leans long.
     """
     try:
-        meta, contexts = _post_info({"type": "metaAndAssetCtxs"})
+        meta, contexts = post_info({"type": "metaAndAssetCtxs"})
         names = [entry.get("name") for entry in meta.get("universe", [])]
         index = names.index(coin)
         return float(contexts[index].get("funding"))

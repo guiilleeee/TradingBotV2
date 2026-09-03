@@ -5,6 +5,11 @@ venv/
 .env
 .pytest_cache/
 .hl_leaderboard_cache.json
+symbols.yaml.tmp
+# backtest.db is a local, ad-hoc evaluation artifact (no CI workflow produces
+# it), unlike trading_bot.db/signals.csv which ARE the live system's real
+# audit trail and are deliberately tracked -- see the note below.
+backtest.db
 .DS_Store
 
 # NOTE: do NOT add a blanket *.csv or *.db rule here. A blanket ignore silently

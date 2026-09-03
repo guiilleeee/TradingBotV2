@@ -453,3 +453,91 @@ def test_positioning_cannot_shortcut_the_stop_loss_requirement(tmp_path, monkeyp
     rows = read_csv(config)
     assert rows[0]["action"] == "hold"
     assert "take_profit_price" in rows[0]["override_reason"]
+
+
+# ------------------------------------------------ symbols.yaml merge (Phase 2)
+
+
+def test_missing_symbols_file_falls_back_to_config_yaml(tmp_path):
+    config_path, config = write_config(tmp_path)
+    loaded = main.load_config(str(config_path), str(tmp_path / "does_not_exist.yaml"))
+    assert loaded["symbols"] == config["symbols"]
+
+
+def test_empty_symbols_file_falls_back_to_config_yaml(tmp_path):
+    config_path, config = write_config(tmp_path)
+    symbols_path = tmp_path / "symbols.yaml"
+    symbols_path.write_text("symbols: []\n", encoding="utf-8")
+    loaded = main.load_config(str(config_path), str(symbols_path))
+    assert loaded["symbols"] == config["symbols"]
+
+
+def test_symbols_file_with_no_symbols_key_falls_back(tmp_path):
+    config_path, config = write_config(tmp_path)
+    symbols_path = tmp_path / "symbols.yaml"
+    symbols_path.write_text("generated_at: '2026-01-01'\n", encoding="utf-8")
+    loaded = main.load_config(str(config_path), str(symbols_path))
+    assert loaded["symbols"] == config["symbols"]
+
+
+def test_populated_symbols_file_overrides_the_symbol_list(tmp_path):
+    config_path, _ = write_config(tmp_path)
+    symbols_path = tmp_path / "symbols.yaml"
+    symbols_path.write_text(
+        "symbols:\n  - symbol: NVDA\n    asset_class: equity\n"
+        "  - symbol: SOL-USD\n    asset_class: crypto\n",
+        encoding="utf-8",
+    )
+    loaded = main.load_config(str(config_path), str(symbols_path))
+    assert loaded["symbols"] == [
+        {"symbol": "NVDA", "asset_class": "equity"},
+        {"symbol": "SOL-USD", "asset_class": "crypto"},
+    ]
+
+
+def test_symbols_file_cannot_touch_anything_but_the_symbols_key(tmp_path):
+    config_path, _ = write_config(
+        tmp_path, live_execution=True, max_risk_pct=1.0, circuit_breaker_loss_pct=3.0
+    )
+    symbols_path = tmp_path / "symbols.yaml"
+    # Even if a screening bug somehow wrote risk-relevant keys into symbols.yaml,
+    # main.load_config must never read anything from it but "symbols".
+    symbols_path.write_text(
+        "symbols:\n  - symbol: NVDA\n    asset_class: equity\n"
+        "live_execution: false\n"
+        "max_risk_pct: 99.0\n"
+        "circuit_breaker_loss_pct: 0.01\n",
+        encoding="utf-8",
+    )
+    loaded = main.load_config(str(config_path), str(symbols_path))
+    assert loaded["live_execution"] is True
+    assert loaded["max_risk_pct"] == 1.0
+    assert loaded["circuit_breaker_loss_pct"] == 3.0
+    assert loaded["symbols"] == [{"symbol": "NVDA", "asset_class": "equity"}]
+
+
+def test_run_cycle_uses_the_symbols_file_when_present(tmp_path, monkeypatch):
+    config_path, config = write_config(tmp_path, symbols=[{"symbol": "AAPL", "asset_class": "equity"}])
+    symbols_path = tmp_path / "symbols.yaml"
+    symbols_path.write_text(
+        "symbols:\n  - symbol: NVDA\n    asset_class: equity\n", encoding="utf-8"
+    )
+    stub_market(monkeypatch, {"NVDA": 100.0})
+    seen = []
+    stub_provider(monkeypatch, hold_signal("NVDA"), capture=seen)
+
+    main.run_cycle(str(config_path), str(symbols_path))
+
+    assert seen[0]["input"].symbol == "NVDA"
+
+
+def test_run_cycle_works_unmodified_when_symbols_file_does_not_exist(tmp_path, monkeypatch):
+    config_path, config = write_config(tmp_path)
+    stub_market(monkeypatch, {"AAPL": 100.0})
+    seen = []
+    stub_provider(monkeypatch, hold_signal("AAPL"), capture=seen)
+
+    rc = main.run_cycle(str(config_path), str(tmp_path / "no_such_symbols.yaml"))
+
+    assert rc == 0
+    assert seen[0]["input"].symbol == "AAPL"
