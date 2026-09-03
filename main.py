@@ -35,8 +35,21 @@ DEFAULT_SYMBOLS_PATH = "symbols.yaml"
 # --------------------------------------------------------------------- config
 
 
+def default_symbols_path(config_path: str) -> str:
+    """Where symbols.yaml lives for a given config.yaml, absent an explicit override.
+
+    Scoped to `config_path`'s own directory rather than a bare "symbols.yaml"
+    resolved against the current working directory -- a fixed cwd-relative
+    default meant every test using an isolated tmp_path config was actually
+    picking up the real, committed repo-root symbols.yaml in CI (whatever cwd
+    happened to be pytest's), silently overriding each test's own symbol list.
+    """
+    directory = os.path.dirname(config_path)
+    return os.path.join(directory, DEFAULT_SYMBOLS_PATH) if directory else DEFAULT_SYMBOLS_PATH
+
+
 def load_config(
-    path: str = DEFAULT_CONFIG_PATH, symbols_path: str = DEFAULT_SYMBOLS_PATH
+    path: str = DEFAULT_CONFIG_PATH, symbols_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """Load config.yaml, then let symbols.yaml (if present) override its symbol list.
 
@@ -49,8 +62,17 @@ def load_config(
     A missing or empty symbols.yaml is not an error: config.yaml's own `symbols`
     (hand-tuned, checked into the repo) stands in for it, so the 4h cycle never
     ends up with nothing to trade because the weekly job hasn't run yet, or broke.
+
+    `symbols_path` defaults to `default_symbols_path(path)` -- i.e. scoped next
+    to whichever config.yaml is actually in use -- rather than a fixed cwd-relative
+    path, so an isolated (e.g. tmp_path-based) config can never pick up the real
+    project's committed symbols.yaml just because pytest's cwd happens to be the
+    repo root.
     """
     import yaml  # imported here so importing this module needs no config deps
+
+    if symbols_path is None:
+        symbols_path = default_symbols_path(path)
 
     with open(path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle) or {}
@@ -234,7 +256,7 @@ def sweep_open_positions(
 
 
 def run_cycle(
-    config_path: str = DEFAULT_CONFIG_PATH, symbols_path: str = DEFAULT_SYMBOLS_PATH
+    config_path: str = DEFAULT_CONFIG_PATH, symbols_path: Optional[str] = None
 ) -> int:
     # Safe default for the failure alert's mode label if resolution itself
     # fails before is_live is known -- mirrors mode.py's own philosophy
@@ -502,9 +524,7 @@ def _update_ledger(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run one TradingBot cycle.")
     parser.add_argument("--config", default=os.environ.get("BOT_CONFIG", DEFAULT_CONFIG_PATH))
-    parser.add_argument(
-        "--symbols", default=os.environ.get("BOT_SYMBOLS", DEFAULT_SYMBOLS_PATH)
-    )
+    parser.add_argument("--symbols", default=os.environ.get("BOT_SYMBOLS"))
     args = parser.parse_args()
     return run_cycle(args.config, args.symbols)
 

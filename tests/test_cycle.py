@@ -5,6 +5,7 @@ called, a ledger update that never happens, a threshold that leaks across modes.
 """
 
 import csv
+import os
 
 import pandas as pd
 import pytest
@@ -541,3 +542,41 @@ def test_run_cycle_works_unmodified_when_symbols_file_does_not_exist(tmp_path, m
 
     assert rc == 0
     assert seen[0]["input"].symbol == "AAPL"
+
+
+def test_default_symbols_path_is_scoped_to_the_configs_own_directory():
+    assert main.default_symbols_path(r"/some/dir/config.yaml") == os.path.join(
+        "/some/dir", "symbols.yaml"
+    )
+    # A bare filename with no directory component still resolves to a bare
+    # filename -- same cwd-relative behaviour as before for that one case.
+    assert main.default_symbols_path("config.yaml") == "symbols.yaml"
+
+
+def test_isolated_config_never_sees_a_symbols_yaml_from_another_directory(tmp_path, monkeypatch):
+    """A tmp_path config must never pick up a symbols.yaml living elsewhere.
+
+    Regression test for the bug where the default symbols_path was a bare
+    "symbols.yaml" resolved against the current working directory: in CI that
+    resolved to the real, committed repo-root symbols.yaml, silently
+    overriding every test's own isolated symbol list. Proven here by planting
+    a *different* symbols.yaml next to a config the test is not using, and in
+    the actual cwd, then asserting neither has any effect.
+    """
+    real_config_dir = tmp_path / "actual_config_dir"
+    real_config_dir.mkdir()
+    config_path, config = write_config(real_config_dir)
+
+    other_config_dir = tmp_path / "other_config_dir"
+    other_config_dir.mkdir()
+    (other_config_dir / "symbols.yaml").write_text(
+        "symbols:\n  - symbol: HOOD\n    asset_class: equity\n", encoding="utf-8"
+    )
+    (tmp_path / "symbols.yaml").write_text(
+        "symbols:\n  - symbol: ZBRA\n    asset_class: equity\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    loaded = main.load_config(str(config_path))
+
+    assert loaded["symbols"] == config["symbols"]
