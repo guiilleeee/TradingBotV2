@@ -1,22 +1,30 @@
 """Public Hyperliquid trader-positioning intelligence.
 
-What this is: a small, factual, human-readable sentence about how large successful
-Hyperliquid wallets are currently positioned in an asset, handed to the model as
-one more input alongside price, indicators and headlines.
+What this is: a small, factual, human-readable summary of how large successful
+Hyperliquid wallets are positioned in an asset AND what they have actually been
+doing in it recently, handed to the model as one more input alongside price,
+indicators and headlines. The aggregate percentage (existing) and the specific
+recent trades (this module's newer half) are two views of the same underlying
+sample -- the same top wallets, richer detail, nothing new in kind.
 
 What this is emphatically NOT: a copy-trading mechanism. Nothing here decides
 anything. The output is a string on SignalInput, and the only thing that ever reads
 it is the model's own reasoning. There is no path from this module to an order that
 does not pass through risk_manager.validate() exactly like every other signal --
-same confidence threshold, same stop-loss requirement, same sizing, same caps.
+same confidence threshold, same stop-loss requirement, same sizing, same caps. A
+specific, individually-attributed trade ("wallet ending ...4f2a opened a $52,000
+long 3 hours ago") is still just one more sentence of directional bias, covered by
+the exact same system-prompt rule as the aggregate percentage it sits next to --
+see prompts.py rule 5.
 
-One honest caveat is baked into the wording it produces: the positions being read
-are Hyperliquid PERPETUAL positions, because that is the only positioning data the
-venue exposes. We trade spot without leverage. The summary says "perps" out loud
-rather than implying these wallets hold spot.
+One honest caveat is baked into the wording it produces: the positions and trades
+being read are Hyperliquid PERPETUAL activity, because that is the only positioning
+data the venue exposes. We trade spot without leverage. The summary says "perps" out
+loud rather than implying these wallets hold spot.
 
 Every function here fails soft. Positioning data is a nice-to-have; a cycle must
-never stop because a leaderboard was slow.
+never stop because a leaderboard was slow, or because one wallet's fill history
+timed out.
 """
 
 from __future__ import annotations
@@ -42,13 +50,24 @@ HTTP_TIMEOUT = 30.0
 LEADERBOARD_CACHE_HOURS = 12.0
 DEFAULT_CACHE_PATH = ".hl_leaderboard_cache.json"
 
-# How many top wallets to inspect. Each costs one clearinghouseState request, so
-# this trades breadth against cycle time (~0.3s per wallet).
+# How many top wallets to inspect. Each costs one clearinghouseState request (for
+# the aggregate position) plus one userFills request (for recent trades) -- twice
+# the calls of the aggregate-only version, but the same wallet COUNT, which is the
+# thing that actually scales cost. ~0.3s per wallet per call.
 TOP_WALLETS = 15
 # Ignore small accounts: a 900% monthly ROI on $200 is noise, not information.
 MIN_ACCOUNT_VALUE_USD = 100_000.0
 # Below this many dollars of aggregate exposure, the sample is too thin to report.
 MIN_TOTAL_NOTIONAL_USD = 50_000.0
+
+# How far back to look for individual recent trades, and how small a single trade
+# can be before it's noise rather than information -- same philosophy as
+# MIN_ACCOUNT_VALUE_USD/MIN_TOTAL_NOTIONAL_USD above, applied at the trade level.
+RECENT_TRADES_WINDOW_HOURS = 24.0
+MIN_TRADE_NOTIONAL_USD = 5_000.0
+# A few lines at most, not a wall of raw data -- across ALL sampled wallets combined,
+# not per wallet, so one hyperactive wallet cannot crowd out everyone else's trades.
+MAX_RECENT_TRADES_IN_SUMMARY = 5
 
 
 def post_info(body: Dict[str, Any]) -> Any:
@@ -177,6 +196,137 @@ def aggregate_positioning(wallets: List[Tuple[str, float]]) -> Dict[str, Dict[st
     return totals
 
 
+# --------------------------------------------------------------- recent trades
+
+
+# Hyperliquid's own vocabulary for a perp fill's effect on the position. A fill on
+# a SPOT market (Hyperliquid names those "@<index>", not a plain coin symbol) uses
+# "Buy"/"Sell" instead -- excluded by construction here, not filtered explicitly:
+# it never matches `coin`, which is always a bare perp name like "BTC" (see
+# base_symbol), so a spot fill simply never passes the coin-equality check below.
+_SIGNIFICANT_FILL_DIRS = {
+    "Open Long", "Open Short", "Close Long", "Close Short", "Long > Short", "Short > Long",
+}
+
+
+def recent_trades_for_coin(
+    fills: List[Dict[str, Any]], coin: str, since_ms: float
+) -> List[Dict[str, Any]]:
+    """One wallet's `coin` perp fills since `since_ms`, grouped into whole trades.
+
+    A single order routinely fills across several price levels as separate rows
+    sharing one `oid` (order id) -- verified live against Hyperliquid's real
+    userFills response. Grouped here so one trade decision produces one entry, not
+    one per partial fill; `time` becomes the latest fill in the group (when the
+    order finished, not when it started) and `notional` their summed dollar size.
+    """
+    grouped: Dict[Any, Dict[str, Any]] = {}
+    for fill in fills:
+        if fill.get("coin") != coin or fill.get("dir") not in _SIGNIFICANT_FILL_DIRS:
+            continue
+        try:
+            fill_time = float(fill.get("time", 0.0))
+            notional = abs(float(fill.get("sz", 0.0))) * float(fill.get("px", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if fill_time < since_ms:
+            continue
+
+        bucket = grouped.setdefault(
+            fill.get("oid"), {"dir": fill.get("dir"), "time": fill_time, "notional": 0.0}
+        )
+        bucket["notional"] += notional
+        bucket["time"] = max(bucket["time"], fill_time)
+
+    trades = [t for t in grouped.values() if t["notional"] >= MIN_TRADE_NOTIONAL_USD]
+    trades.sort(key=lambda t: t["time"], reverse=True)
+    return trades
+
+
+def _redact_address(address: str) -> str:
+    """`0xABCDEF...1234` -> `...1234`. Enough to distinguish wallets in one summary
+    without printing a full address the model has no legitimate use for.
+    """
+    return "..." + address[-4:] if len(address) >= 4 else address
+
+
+_TRADE_VERBS = {
+    "Open Long": "opened a ${notional:,.0f} long",
+    "Open Short": "opened a ${notional:,.0f} short",
+    "Close Long": "closed a ${notional:,.0f} long",
+    "Close Short": "closed a ${notional:,.0f} short",
+    "Long > Short": "flipped a ${notional:,.0f} position from long to short",
+    "Short > Long": "flipped a ${notional:,.0f} position from short to long",
+}
+
+
+def _describe_time_ago(trade_time_ms: float, now_ms: float) -> str:
+    hours = max(0.0, (now_ms - trade_time_ms) / 3_600_000.0)
+    if hours < 1.0:
+        minutes = max(1, round(hours * 60))
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    rounded = round(hours)
+    return f"{rounded} hour{'s' if rounded != 1 else ''} ago"
+
+
+def describe_recent_trades(
+    entries: List[Tuple[str, Dict[str, Any]]], now_ms: float
+) -> Optional[str]:
+    """Turn (address, trade) pairs into the factual, specific sentence the model
+    sees -- e.g. "wallet ending ...4f2a opened a $52,000 long 3 hours ago". None
+    when there is nothing recent enough or large enough to be worth reporting.
+    """
+    if not entries:
+        return None
+
+    lines = []
+    for address, trade in entries[:MAX_RECENT_TRADES_IN_SUMMARY]:
+        verb = _TRADE_VERBS.get(trade["dir"])
+        if verb is None:
+            continue
+        lines.append(
+            f"wallet ending {_redact_address(address)} "
+            f"{verb.format(notional=trade['notional'])} "
+            f"{_describe_time_ago(trade['time'], now_ms)}"
+        )
+
+    if not lines:
+        return None
+
+    return (
+        f"Specific recent activity from the same sampled wallets in the last "
+        f"~{int(RECENT_TRADES_WINDOW_HOURS)}h: " + "; ".join(lines) + "."
+    )
+
+
+def fetch_recent_trade_notes(
+    coin: str, wallets: List[Tuple[str, float]], now_ms: Optional[float] = None
+) -> Optional[str]:
+    """The specific-trades sentence for `coin`, sampled from the same `wallets`
+    already used for the aggregate position summary.
+
+    One wallet's fill history failing (timeout, malformed address, anything) is
+    skipped, never fatal -- identical philosophy to aggregate_positioning's
+    per-wallet try/except.
+    """
+    now_ms = now_ms if now_ms is not None else time.time() * 1000.0
+    since_ms = now_ms - RECENT_TRADES_WINDOW_HOURS * 3_600_000.0
+
+    entries: List[Tuple[str, Dict[str, Any]]] = []
+    for address, _roi in wallets:
+        try:
+            fills = post_info({"type": "userFills", "user": address})
+        except Exception:
+            continue
+        if not isinstance(fills, list):
+            continue
+        for trade in recent_trades_for_coin(fills, coin, since_ms):
+            entries.append((address, trade))
+
+    entries.sort(key=lambda pair: pair[1]["time"], reverse=True)
+    return describe_recent_trades(entries, now_ms)
+
+
 def fetch_funding_rate(coin: str) -> Optional[float]:
     """Current funding rate for `coin`'s perp, a cheap crowd-positioning proxy.
 
@@ -194,11 +344,22 @@ def fetch_funding_rate(coin: str) -> Optional[float]:
 # --------------------------------------------------------------------- summary
 
 
-def summarise(coin: str, totals: Dict[str, Dict[str, float]], funding: Optional[float]) -> Optional[str]:
-    """Turn the aggregates into one short, factual, clearly-hedged sentence.
+def summarise(
+    coin: str,
+    totals: Dict[str, Dict[str, float]],
+    funding: Optional[float],
+    recent_trade_notes: Optional[str] = None,
+) -> Optional[str]:
+    """Turn the aggregates -- and, when available, specific recent trades -- into
+    one short, factual, clearly-hedged passage.
 
-    Returns None when there is nothing worth saying. Silence is correct here --
-    an invented or padded summary is worse than no summary.
+    `recent_trade_notes` (from fetch_recent_trade_notes) is optional and additive:
+    it can make an otherwise-empty summary non-empty (recent trades exist even when
+    no aggregate position clears MIN_TOTAL_NOTIONAL_USD), but never replaces the
+    aggregate view or the hedging paragraph below -- both apply to it equally.
+
+    Returns None when there is nothing worth saying at all. Silence is correct here
+    -- an invented or padded summary is worse than no summary.
     """
     parts: List[str] = []
     bucket = totals.get(coin)
@@ -243,15 +404,26 @@ def summarise(coin: str, totals: Dict[str, Dict[str, float]], funding: Optional[
             )
         parts.append(note)
 
-    if not parts:
+    if not parts and not recent_trade_notes:
         return None
 
+    # The aggregate/funding sentence and the specific-trades sentence are each
+    # optional on their own (recent trades can exist for a coin with no aggregate
+    # position large enough to clear MIN_TOTAL_NOTIONAL_USD, and vice versa). Each
+    # is stripped of its own trailing period before joining so exactly one period
+    # ever separates sentences -- never a bare concatenation artifact like "..".
+    lead_sentences = []
+    if parts:
+        lead_sentences.append("; ".join(parts))
+    if recent_trade_notes:
+        lead_sentences.append(recent_trade_notes.rstrip("."))
+
     return (
-        "; ".join(parts)
-        + ". These are leveraged perpetual positions taken by other traders, not spot "
-        "holdings, and this bot trades spot without leverage. Treat this as directional "
-        "bias only, never as confirmation, and never as a reason to act without your own "
-        "technical justification."
+        ". ".join(lead_sentences)
+        + ". These are leveraged perpetual positions (and, where noted above, trades) "
+        "taken by other traders, not spot holdings, and this bot trades spot without "
+        "leverage. Treat this as directional bias only, never as confirmation, and "
+        "never as a reason to act without your own technical justification."
     )
 
 
@@ -273,7 +445,8 @@ def fetch_positioning(
         coin = base_symbol(symbol)
         wallets = top_wallets(fetch_leaderboard(cache_path), limit=limit)
         totals = aggregate_positioning(wallets) if wallets else {}
-        return summarise(coin, totals, fetch_funding_rate(coin))
+        recent_trade_notes = fetch_recent_trade_notes(coin, wallets) if wallets else None
+        return summarise(coin, totals, fetch_funding_rate(coin), recent_trade_notes)
     except Exception:
         # Positioning is a nice-to-have. A cycle never stops for it.
         return None

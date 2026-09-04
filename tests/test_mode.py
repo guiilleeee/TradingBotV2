@@ -105,7 +105,21 @@ def test_rule_5_covers_positioning_as_well_as_headlines():
     assert "directional bias only, never certainty" in text
     assert "no exception for positioning data" in text
     assert "Never copy a position" in text
-    assert "the only argument for a trade is that other traders hold it, the answer is hold" in text
+    assert (
+        "the only argument for a trade is that other traders hold it or just made "
+        "it, the answer is hold" in text
+    )
+
+
+def test_rule_5_covers_specific_recent_trades_not_just_the_aggregate():
+    # market_intel.py now feeds specific, individually-attributed recent trades
+    # ("wallet ending ...4f2a opened a $520,000 long") alongside the aggregate
+    # percentage. A vivid, specific number must not read as more decisive than the
+    # aggregate it sits next to -- both are covered by the same "never copy" rule.
+    text = " ".join(SYSTEM_PROMPT.split())
+    assert "no exception for a specific, individually-attributed trade" in text
+    assert "Never copy a position or a recent trade" in text
+    assert "trades described are fills on those same leveraged perpetual markets" in text
 
 
 def test_prompt_states_the_perp_versus_spot_distinction():

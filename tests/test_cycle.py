@@ -432,6 +432,41 @@ def test_positioning_cannot_shortcut_the_confidence_threshold(tmp_path, monkeypa
     assert rows[0]["execution_status"] in ("", None)  # nothing was executed
 
 
+def test_strong_recent_trade_activity_without_technical_confirmation_still_holds(tmp_path, monkeypatch):
+    """Acceptance criterion for the recent-trades enrichment (market_intel.py):
+    specific, individually-attributed recent buying ("wallet ending ...4f2a opened
+    a $520,000 long 1 hour ago") is strictly more vivid than the old aggregate
+    percentage, but must be exactly as inert. A model that honestly sees no
+    technical confirmation (flat price here -- no momentum, no volume signal)
+    still holds, no matter how compelling the trade narrative reads.
+    """
+    import market_intel
+
+    path, config = write_config(tmp_path, symbols=[{"symbol": "BTC-USD", "asset_class": "crypto"}])
+    stub_market(monkeypatch, {"BTC-USD": 50000.0})
+    monkeypatch.setattr(
+        market_intel, "fetch_positioning",
+        lambda symbol, asset_class: (
+            "Specific recent activity from the same sampled wallets in the last ~24h: "
+            "wallet ending ...4f2a opened a $520,000 long 1 hour ago; wallet ending "
+            "...9c11 opened a $310,000 long 2 hours ago. These are leveraged perpetual "
+            "positions (and, where noted above, trades) taken by other traders, not "
+            "spot holdings, and this bot trades spot without leverage. Treat this as "
+            "directional bias only, never as confirmation, and never as a reason to "
+            "act without your own technical justification."
+        ),
+    )
+    seen = []
+    stub_provider(monkeypatch, hold_signal("BTC-USD"), capture=seen)
+
+    main.run_cycle(str(path))
+
+    assert seen[0]["input"].market_positioning is not None
+    assert "wallet ending" in seen[0]["input"].market_positioning
+    rows = read_csv(config)
+    assert rows[0]["action"] == "hold"
+
+
 def test_positioning_cannot_shortcut_the_stop_loss_requirement(tmp_path, monkeypatch):
     import market_intel
 

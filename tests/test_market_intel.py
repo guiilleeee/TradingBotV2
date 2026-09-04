@@ -5,6 +5,7 @@ reasoning and can never become a shortcut around the risk layer.
 """
 
 import json
+import time
 
 import pytest
 
@@ -275,3 +276,176 @@ def test_summary_makes_no_agreement_claim_without_a_wallet_sample():
 def test_every_lean_combination_is_described_correctly(wallet_long, funding, expected):
     totals = totals_for(9_000_000, 0) if wallet_long else totals_for(0, 9_000_000)
     assert expected in market_intel.summarise("BTC", totals, funding)
+
+
+# ------------------------------------------------------------ recent trades
+
+
+def fill(coin, dir_, sz, px, time_ms, oid=1):
+    return {"coin": coin, "sz": str(sz), "px": str(px), "dir": dir_, "time": time_ms, "oid": oid}
+
+
+def test_recent_trades_groups_partial_fills_sharing_an_order_id():
+    # Verified live against Hyperliquid: one order routinely fills across several
+    # price levels as separate rows sharing one oid -- these must collapse to one
+    # trade, not read as several independent trades.
+    fills = [
+        fill("BTC", "Open Long", 0.3, 50000, 1_000_000, oid=1),
+        fill("BTC", "Open Long", 0.2, 50010, 1_000_050, oid=1),
+    ]
+    trades = market_intel.recent_trades_for_coin(fills, "BTC", since_ms=0)
+    assert len(trades) == 1
+    assert trades[0]["notional"] == pytest.approx(0.3 * 50000 + 0.2 * 50010)
+    assert trades[0]["time"] == 1_000_050
+    assert trades[0]["dir"] == "Open Long"
+
+
+def test_recent_trades_ignores_other_coins():
+    fills = [fill("ETH", "Open Long", 10, 3000, 1_000_000, oid=1)]
+    assert market_intel.recent_trades_for_coin(fills, "BTC", since_ms=0) == []
+
+
+def test_recent_trades_ignores_spot_fills_by_construction():
+    # Spot fills are named "@<index>", never a bare coin symbol -- they can never
+    # match `coin`, so a spot dust conversion or spot sell never leaks in here.
+    fills = [fill("@142", "Sell", 1, 100, 1_000_000, oid=2)]
+    assert market_intel.recent_trades_for_coin(fills, "BTC", since_ms=0) == []
+
+
+def test_recent_trades_ignores_non_significant_fill_directions():
+    fills = [fill("BTC", "Buy", 1.0, 50000, 1_000_000, oid=1)]
+    assert market_intel.recent_trades_for_coin(fills, "BTC", since_ms=0) == []
+
+
+def test_recent_trades_excludes_fills_before_the_cutoff():
+    fills = [fill("BTC", "Open Long", 1.0, 50000, 500, oid=1)]
+    assert market_intel.recent_trades_for_coin(fills, "BTC", since_ms=1000) == []
+
+
+def test_recent_trades_drops_dust_below_the_notional_floor():
+    fills = [fill("BTC", "Open Long", 0.001, 50000, 1_000_000, oid=1)]  # $50
+    assert market_intel.recent_trades_for_coin(fills, "BTC", since_ms=0) == []
+
+
+def test_recent_trades_are_sorted_newest_first():
+    fills = [
+        fill("BTC", "Open Long", 1.0, 50000, 1_000_000, oid=1),
+        fill("BTC", "Close Long", 1.0, 51000, 2_000_000, oid=2),
+    ]
+    trades = market_intel.recent_trades_for_coin(fills, "BTC", since_ms=0)
+    assert [t["time"] for t in trades] == [2_000_000, 1_000_000]
+
+
+# --------------------------------------------------------- describing trades
+
+
+def test_describe_recent_trades_formats_amount_direction_and_recency():
+    now_ms = 10_000_000_000
+    entries = [("0xabcdef1234", {"dir": "Open Long", "time": now_ms - 3 * 3_600_000, "notional": 52000.0})]
+    text = market_intel.describe_recent_trades(entries, now_ms)
+    assert "wallet ending ...1234" in text
+    assert "opened a $52,000 long" in text
+    assert "3 hours ago" in text
+
+
+def test_describe_recent_trades_pluralises_a_single_hour_and_minute_correctly():
+    now_ms = 10_000_000_000
+    one_hour = [("0x0000000001", {"dir": "Close Short", "time": now_ms - 3_600_000, "notional": 1000.0})]
+    assert "1 hour ago" in market_intel.describe_recent_trades(one_hour, now_ms)
+
+    one_min = [("0x0000000002", {"dir": "Close Short", "time": now_ms - 60_000, "notional": 1000.0})]
+    assert "1 minute ago" in market_intel.describe_recent_trades(one_min, now_ms)
+
+
+def test_describe_recent_trades_returns_none_when_empty():
+    assert market_intel.describe_recent_trades([], 10_000_000) is None
+
+
+def test_describe_recent_trades_caps_the_line_count():
+    now_ms = 10_000_000_000
+    entries = [
+        (f"0x{i:040d}", {"dir": "Open Long", "time": now_ms - i * 60_000, "notional": 10_000.0})
+        for i in range(10)
+    ]
+    text = market_intel.describe_recent_trades(entries, now_ms)
+    assert text.count("wallet ending") == market_intel.MAX_RECENT_TRADES_IN_SUMMARY
+
+
+# ------------------------------------------------------- fetch_recent_trade_notes
+
+
+def test_fetch_recent_trade_notes_skips_a_failing_wallet(monkeypatch):
+    now_ms = time.time() * 1000.0
+
+    def flaky(body):
+        if body["user"] == "0xbad":
+            raise RuntimeError("timeout")
+        return [fill("BTC", "Open Long", 1.0, 50000, now_ms - 3 * 3_600_000, oid=1)]
+
+    monkeypatch.setattr(market_intel, "post_info", flaky)
+    text = market_intel.fetch_recent_trade_notes("BTC", [("0xbad", 1.0), ("0xok", 0.5)], now_ms)
+    assert text is not None
+    assert "opened a $50,000 long" in text
+
+
+def test_fetch_recent_trade_notes_returns_none_when_nothing_recent(monkeypatch):
+    monkeypatch.setattr(market_intel, "post_info", lambda body: [])
+    assert market_intel.fetch_recent_trade_notes("BTC", [("0xa", 1.0)]) is None
+
+
+def test_fetch_recent_trade_notes_degrades_on_an_unexpected_response_shape(monkeypatch):
+    monkeypatch.setattr(market_intel, "post_info", lambda body: {"unexpected": "shape"})
+    assert market_intel.fetch_recent_trade_notes("BTC", [("0xa", 1.0)]) is None
+
+
+# ---------------------------------------------- summarise with recent trade notes
+
+
+def test_summary_includes_recent_trade_notes_alongside_aggregate():
+    notes = "Specific recent activity from the same sampled wallets in the last ~24h: wallet ending ...1234 opened a $52,000 long 3 hours ago."
+    text = market_intel.summarise("BTC", totals_for(900_000, 100_000), None, notes)
+    assert "net long by roughly 80%" in text
+    assert "wallet ending ...1234 opened a $52,000 long 3 hours ago" in text
+    assert "ago.." not in text  # no double-period join artifact
+
+
+def test_summary_is_not_none_when_only_recent_trade_notes_exist():
+    notes = "Specific recent activity from the same sampled wallets in the last ~24h: wallet ending ...1234 opened a $52,000 long 3 hours ago."
+    text = market_intel.summarise("BTC", {}, None, notes)
+    assert text is not None
+    assert "wallet ending ...1234" in text
+    assert "not spot holdings" in text  # the hedge still applies with no aggregate line
+
+
+def test_summary_still_none_when_nothing_at_all():
+    assert market_intel.summarise("BTC", {}, None, None) is None
+
+
+def test_summary_hedge_still_mentions_trades_not_just_positions():
+    notes = "Specific recent activity from the same sampled wallets in the last ~24h: wallet ending ...1234 opened a $52,000 long 3 hours ago."
+    text = market_intel.summarise("BTC", totals_for(900_000, 100_000), None, notes)
+    assert "trades spot without leverage" in text
+    assert "directional bias only" in text
+
+
+def test_positioning_end_to_end_includes_recent_trades(monkeypatch):
+    monkeypatch.setattr(
+        market_intel, "fetch_leaderboard",
+        lambda cache_path: [leaderboard_row("0xa", 1_000_000, 0.9)],
+    )
+    now_ms = time.time() * 1000.0
+
+    def fake_post_info(body):
+        if body["type"] == "clearinghouseState":
+            return state(("BTC", 1.0, 900_000))
+        if body["type"] == "userFills":
+            return [fill("BTC", "Open Long", 1.04, 50000, now_ms - 3 * 3_600_000, oid=1)]
+        raise AssertionError(f"unexpected info type: {body['type']}")
+
+    monkeypatch.setattr(market_intel, "post_info", fake_post_info)
+    monkeypatch.setattr(market_intel, "fetch_funding_rate", lambda coin: None)
+
+    text = market_intel.fetch_positioning("BTC-USD", "crypto")
+    assert "net long by roughly 100%" in text
+    assert "wallet ending" in text
+    assert "opened a $52,000 long" in text
