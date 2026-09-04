@@ -194,6 +194,7 @@
   .holding .value b { color: var(--text); font-weight: 600; }
   .holding .pnl { font-size: 11.5px; display: flex; align-items: center; gap: 10px; }
   .holding .pnl-figures b { font-size: 17px; display: block; }
+  .holding .pnl-label { display: block; font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 2px; }
   .spark { width: 56px; height: 22px; flex: none; }
   .returns { display: flex; gap: var(--space-3); flex-wrap: wrap; align-content: center; }
   .returns .r { text-align: center; min-width: 42px; }
@@ -235,9 +236,32 @@
   .mode-chip.SIMULACIO { background: rgba(61,220,132,.14); color: var(--sim); }
 
   /* -------------------------------------------------------------- glossary */
-  dl.glossary dt { font-weight: 700; margin-top: var(--space-4); color: var(--accent); }
-  dl.glossary dt:first-child { margin-top: 0; }
-  dl.glossary dd { margin: 4px 0 0; color: var(--text); }
+  .gloss-search-wrap { margin-bottom: var(--space-6); }
+  .gloss-search {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    font: inherit; font-size: 13px; padding: 10px 14px; border-radius: var(--radius-md);
+    outline: none; transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  }
+  .gloss-search::placeholder { color: var(--muted); }
+  .gloss-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,157,255,.15); }
+
+  .gloss-category { margin-bottom: var(--space-6); }
+  .gloss-category:last-child { margin-bottom: 0; }
+  .gloss-cat-header {
+    display: flex; align-items: center; gap: 8px; font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: .5px; color: var(--muted); margin: 0 0 var(--space-3); font-weight: 700;
+  }
+  .gloss-cat-header .icon { color: var(--accent); }
+  .gloss-terms { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--space-3); }
+  .gloss-card {
+    background: var(--panel-2); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);
+    box-shadow: var(--elevation-1);
+    transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  }
+  .gloss-card:hover { transform: translateY(-1px); box-shadow: var(--elevation-2); }
+  .gloss-term-heading { font-weight: 600; color: var(--accent); font-size: 13px; letter-spacing: .1px; }
+  .gloss-def { margin: 6px 0 0; color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
+  .gloss-empty { color: var(--muted); font-style: italic; padding: var(--space-3) 2px; }
 
   /* --------------------------------------------------- inline term popover */
   .term { border-bottom: 1px dotted var(--muted); cursor: help; }
@@ -288,11 +312,11 @@
 <!-- ================================================================ Resum -->
 <section id="tab-resum" class="tab active">
   <div class="hero">
-    <div class="hero-label">Patrimoni total</div>
+    <div class="hero-label"><span class="term" data-term="patrimoni total">Patrimoni total</span></div>
     <div class="hero-value mono" id="equity">&mdash;</div>
     <div class="secondary-stats">
       <div class="stat"><b class="mono" id="count">&mdash;</b><span>Senyals</span></div>
-      <div class="stat"><b class="mono" id="pnl">&mdash;</b><span>P&amp;L realitzat</span></div>
+      <div class="stat"><b class="mono" id="pnl">&mdash;</b><span><span class="term" data-term="p&amp;l realitzat">P&amp;L realitzat</span></span></div>
     </div>
   </div>
 
@@ -313,7 +337,7 @@
   <div class="panel">
     <div class="wrap"><table>
       <thead><tr>
-        <th>Data</th><th>Simbol</th><th>Mode</th><th>Accio</th><th>Model</th><th>Conf.</th>
+        <th>Data</th><th>Simbol</th><th>Mode</th><th>Accio</th><th>Model</th><th><span class="term" data-term="confidence">Conf.</span></th>
         <th>Mida %</th><th>Preu</th><th>Exec.</th><th>P&amp;L</th><th>Analisi completa</th>
       </tr></thead>
       <tbody id="rows"></tbody>
@@ -324,7 +348,11 @@
 <!-- =========================================================== Significats -->
 <section id="tab-significats" class="tab">
   <div class="panel">
-    <dl class="glossary" id="glossaryList"></dl>
+    <div class="gloss-search-wrap">
+      <input type="search" id="glossarySearch" class="gloss-search mono"
+             placeholder="Cerca un terme (stop-loss, RSI, confidence...)" autocomplete="off">
+    </div>
+    <div id="glossaryList"></div>
   </div>
 </section>
 
@@ -370,14 +398,66 @@ const GLOSSARY = {
 
 function term(word, label) {
   label = label || word;
-  return `<span class="term" data-term="${word}">${label}</span>`;
+  // data-term round-trips through el.dataset.term on read, which the browser
+  // HTML-decodes automatically -- so the attribute value must be properly
+  // entity-escaped here (glossary keys like "p&l realitzat" contain a literal
+  // "&") for the write side to match.
+  const safeWord = String(word).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return `<span class="term" data-term="${safeWord}">${label}</span>`;
 }
 
+function capitalize(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Categorised purely for the Significats tab's layout -- GLOSSARY itself stays
+// a flat, single source of truth for definitions (read by both this tab and
+// every inline term() elsewhere), so a category is just "which section this
+// key's card renders in", never a second place its text could drift.
+const GLOSSARY_CATEGORIES = [
+  { name: 'Indicadors tecnics', icon: 'i-up', terms: ['rsi', 'sma'] },
+  { name: 'Gestio de risc', icon: 'i-shield', terms: ['stop-loss', 'take-profit', 'circuit breaker', 'confidence', 'override'] },
+  { name: 'Accions i mercat', icon: 'i-wallet', terms: ['buy', 'sell', 'hold', 'spot'] },
+  { name: 'Resultats i mode', icon: 'i-bolt', terms: ['simulacio', 'real', 'nr', 'p&l no realitzat', 'p&l realitzat', 'patrimoni total'] },
+];
+
 function renderGlossaryTab() {
+  // Defensive: a GLOSSARY key added later without being slotted into a category
+  // above still has to show up somewhere, not silently vanish from the tab.
+  const categorised = new Set(GLOSSARY_CATEGORIES.flatMap(c => c.terms));
+  const leftover = Object.keys(GLOSSARY).filter(k => !categorised.has(k));
+  const categories = leftover.length
+    ? [...GLOSSARY_CATEGORIES, { name: 'Altres', icon: 'i-clock', terms: leftover }]
+    : GLOSSARY_CATEGORIES;
+
   const list = document.getElementById('glossaryList');
-  list.innerHTML = Object.entries(GLOSSARY).map(([k, v]) =>
-    `<dt id="term-${k}">${k}</dt><dd>${v}</dd>`
-  ).join('');
+  list.innerHTML = categories.map(cat => `
+    <div class="gloss-category" data-gloss-category>
+      <h3 class="gloss-cat-header"><svg class="icon"><use href="#${cat.icon}"/></svg>${cat.name}</h3>
+      <div class="gloss-terms">
+        ${cat.terms.map(k => `
+          <div class="gloss-card" data-gloss-card data-search="${escapeHtml(k + ' ' + GLOSSARY[k]).toLowerCase()}">
+            <div class="gloss-term-heading mono" id="term-${escapeHtml(k)}">${escapeHtml(k)}</div>
+            <p class="gloss-def">${GLOSSARY[k]}</p>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+
+function wireGlossarySearch() {
+  const input = document.getElementById('glossarySearch');
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    document.querySelectorAll('[data-gloss-card]').forEach(card => {
+      card.hidden = !(!q || card.dataset.search.includes(q));
+    });
+    document.querySelectorAll('[data-gloss-category]').forEach(cat => {
+      const anyVisible = Array.from(cat.querySelectorAll('[data-gloss-card]')).some(c => !c.hidden);
+      cat.hidden = !anyVisible;
+    });
+  });
 }
 
 (function wireTermPopover() {
@@ -705,6 +785,7 @@ function renderHoldings(positions, priceSeriesBySymbol) {
         <div class="pnl">
           ${sparkHtml}
           <div class="pnl-figures">
+            <span class="pnl-label">${term('p&l no realitzat', 'P&amp;L no realitzat')}</span>
             ${pctHtml}
             ${usdHtml}
           </div>
@@ -797,9 +878,12 @@ function confidenceBand(c) {
 function overrideKind(overrideReason) {
   if (!overrideReason) return null;
   const lower = overrideReason.toLowerCase();
-  if (lower.includes('automatic exit')) return { icon: 'i-bolt', iconFill: true, cls: 'auto' };
-  if (lower.includes('circuit breaker')) return { icon: 'i-shield', cls: 'breaker' };
-  return { icon: 'i-shield', cls: 'override' };
+  // glossaryTerm is null for an auto-close: "automatic exit" isn't a glossary
+  // entry in its own right (it's just a stop-loss/take-profit firing), so the
+  // bolt icon plus the raw reason text is the whole story there.
+  if (lower.includes('automatic exit')) return { icon: 'i-bolt', iconFill: true, cls: 'auto', glossaryTerm: null };
+  if (lower.includes('circuit breaker')) return { icon: 'i-shield', cls: 'breaker', glossaryTerm: 'circuit breaker' };
+  return { icon: 'i-shield', cls: 'override', glossaryTerm: 'override' };
 }
 
 function renderAnalisi(data) {
@@ -813,17 +897,22 @@ function renderAnalisi(data) {
     const positioningHtml = r.market_positioning
       ? `<div class="positioning"><div class="sub-label"><svg class="icon"><use href="#i-wallet"/></svg>Posicionament</div>${escapeHtml(r.market_positioning)}</div>`
       : '';
-    const modeChip = r.mode ? `<span class="mode-chip ${r.mode}">${r.mode}</span>` : '';
+    const modeChip = r.mode
+      ? `<span class="mode-chip ${r.mode}">${term(r.mode.toLowerCase(), r.mode)}</span>`
+      : '';
 
     const kind = overrideKind(r.override_reason);
+    const overrideLabel = kind && kind.glossaryTerm
+      ? term(kind.glossaryTerm, capitalize(kind.glossaryTerm)) + ': '
+      : '';
     const overrideHtml = r.override_reason
-      ? `<div class="override-note ${kind ? kind.cls : ''}">${kind ? `<svg class="icon${kind.iconFill ? ' icon-fill' : ''}"><use href="#${kind.icon}"/></svg>` : ''}<span>${escapeHtml(r.override_reason)}</span></div>`
+      ? `<div class="override-note ${kind ? kind.cls : ''}">${kind ? `<svg class="icon${kind.iconFill ? ' icon-fill' : ''}"><use href="#${kind.icon}"/></svg>` : ''}<span>${overrideLabel}${escapeHtml(r.override_reason)}</span></div>`
       : '';
 
     const action = (r.action || '').toLowerCase();
     const actionIcon = ACTION_ICON[action];
     const actionHtml = action
-      ? `<span class="action-cell ${action}">${actionIcon ? `<svg class="icon"><use href="#${actionIcon}"/></svg>` : ''}${escapeHtml(action)}</span>`
+      ? `<span class="action-cell ${action}">${actionIcon ? `<svg class="icon"><use href="#${actionIcon}"/></svg>` : ''}${term(action, escapeHtml(action))}</span>`
       : '';
 
     const conf = r.confidence ? +r.confidence : NaN;
@@ -864,7 +953,7 @@ function renderResum(data, positionsPayload) {
 
   const isLive = positionsPayload ? !!positionsPayload.is_live : false;
   const badge = document.getElementById('modeBadge');
-  badge.innerHTML = '<span class="dot"></span>' + (isLive ? 'REAL' : 'SIMULACIO');
+  badge.innerHTML = '<span class="dot"></span>' + (isLive ? term('real', 'REAL') : term('simulacio', 'SIMULACIO'));
   badge.className = 'mode-badge ' + (isLive ? 'live' : 'sim');
 
   const positions = positionsPayload ? positionsPayload.positions : [];
@@ -908,6 +997,7 @@ async function loadAll() {
 }
 
 renderGlossaryTab();
+wireGlossarySearch();
 moveTabIndicator(document.querySelector('nav.tabs button.active'));
 loadAll().catch(e => {
   document.getElementById('rows').innerHTML =
