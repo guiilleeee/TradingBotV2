@@ -4,199 +4,328 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TradingBot v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: dark;
-    --bg: #0d1117;
-    --panel: #161b22;
-    --panel-2: #1c2330;
-    --border: rgba(255,255,255,.09);
-    --text: #e6edf3;
-    --muted: #8b96a5;
-    --buy: #3fb950;
-    --sell: #f85149;
-    --hold: #8b96a5;
-    --accent: #58a6ff;
-    --sim: #3fb950;
-    --live: #f85149;
+    --bg: #0a0e14;
+    --panel: #12171f;
+    --panel-2: #171d28;
+    --border: rgba(255,255,255,.08);
+    --border-strong: rgba(255,255,255,.16);
+    --text: #e8edf4;
+    --text-dim: #aab4c2;
+    --muted: #7c8798;
+    --buy: #3ddc84;
+    --sell: #ff5c72;
+    --hold: #7c8798;
+    --auto: #f0b429;
+    --breaker: #ff8a3d;
+    --override: #c893ff;
+    --accent: #5b9dff;
+    --sim: #3ddc84;
+    --live: #ff5c72;
+
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+    --space-6: 24px; --space-8: 32px; --space-12: 48px;
+
+    --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px;
+
+    --elevation-1: 0 1px 2px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.025);
+    --elevation-2: 0 8px 24px -6px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.035);
+    --elevation-3: 0 20px 48px -10px rgba(0,0,0,.65), inset 0 1px 0 rgba(255,255,255,.045);
+
+    --ease: cubic-bezier(.2,.8,.2,1);
+    --dur-fast: 170ms;
+    --dur-med: 520ms;
+
+    --font-ui: 'Inter', system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
+
+  /* Respect prefers-reduced-motion globally -- transitions and CSS animations
+     collapse to effectively instant; JS-driven number tweening checks the same
+     media query itself (see REDUCE_MOTION below) and skips straight to the target
+     value instead of running its own rAF loop. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
   * { box-sizing: border-box; }
   html, body { background: var(--bg); }
   body {
-    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-    margin: 0; padding: 20px 24px 60px; color: var(--text);
+    font: 14px/1.55 var(--font-ui);
+    margin: 0; padding: var(--space-6) var(--space-6) var(--space-12); color: var(--text);
+    -webkit-font-smoothing: antialiased;
   }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
-  /* ---- themed scrollbar (dark, matches the panels, not the OS default) ---- */
-  * { scrollbar-width: thin; scrollbar-color: #30384a var(--panel); }
+  /* ---- themed scrollbar ---- */
+  * { scrollbar-width: thin; scrollbar-color: #2c3444 var(--panel); }
   *::-webkit-scrollbar { width: 10px; height: 10px; }
   *::-webkit-scrollbar-track { background: var(--panel); }
-  *::-webkit-scrollbar-thumb { background: #30384a; border-radius: 6px; border: 2px solid var(--panel); }
-  *::-webkit-scrollbar-thumb:hover { background: #3d4761; }
+  *::-webkit-scrollbar-thumb { background: #2c3444; border-radius: 6px; border: 2px solid var(--panel); }
+  *::-webkit-scrollbar-thumb:hover { background: #3a445a; }
 
-  header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 20px; margin-bottom: 18px; }
-  h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  .icon { width: 1em; height: 1em; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.15em; }
+  .icon-fill { fill: currentColor; stroke: none; }
+
+  /* ---------------------------------------------------------------- header */
+  header {
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3) var(--space-6);
+    margin-bottom: var(--space-6);
+  }
+  h1 { font-size: 15px; margin: 0; font-weight: 700; letter-spacing: -.01em; }
   h1 span { color: var(--muted); font-weight: 400; }
 
   .mode-badge {
-    font-size: 11px; font-weight: 700; letter-spacing: .5px; padding: 3px 9px;
-    border-radius: 20px; text-transform: uppercase;
+    display: inline-flex; align-items: center; font-size: 11px; font-weight: 700;
+    letter-spacing: .5px; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;
+    transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   }
-  .mode-badge.live { background: rgba(248,81,73,.15); color: var(--live); border: 1px solid rgba(248,81,73,.35); }
-  .mode-badge.sim { background: rgba(63,185,80,.15); color: var(--sim); border: 1px solid rgba(63,185,80,.35); }
+  .mode-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; margin-right: 6px; }
+  .mode-badge.live { background: rgba(255,92,114,.14); color: var(--live); box-shadow: inset 0 0 0 1px rgba(255,92,114,.3); }
+  .mode-badge.sim { background: rgba(61,220,132,.14); color: var(--sim); box-shadow: inset 0 0 0 1px rgba(61,220,132,.3); }
 
-  .clocks { display: flex; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+  .clocks { display: flex; gap: var(--space-2); margin-left: auto; flex-wrap: wrap; }
   .clock {
     display: flex; align-items: center; gap: 7px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 11px;
+    font-size: 12px; box-shadow: var(--elevation-1);
   }
-  .clock .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .clock .icon { color: var(--muted); }
+  .clock .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
   .clock .dot.open { background: var(--buy); box-shadow: 0 0 6px var(--buy); }
   .clock .dot.closed { background: var(--muted); }
-  .clock b { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .clock b { font-weight: 600; }
   .clock span.label { color: var(--muted); }
 
-  /* ---- countdown ---- */
+  /* -------------------------------------------------------------- countdown */
+  @property --pct {
+    syntax: '<number>'; inherits: true; initial-value: 0;
+  }
   .countdown {
-    display: flex; align-items: center; gap: 10px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 10px; padding: 7px 14px;
+    display: flex; align-items: center; gap: var(--space-3); background: var(--panel);
+    border: 1px solid var(--border); border-radius: var(--radius-md); padding: 7px 15px 7px 7px;
+    box-shadow: var(--elevation-1);
   }
   .countdown .ring {
-    width: 30px; height: 30px; border-radius: 50%; flex: none;
-    background: conic-gradient(var(--accent) calc(var(--pct, 0) * 1%), #263041 0);
+    width: 32px; height: 32px; border-radius: 50%; flex: none;
+    background: conic-gradient(var(--accent) calc(var(--pct, 0) * 1%), #232c3a 0);
     display: flex; align-items: center; justify-content: center;
+    transition: --pct 900ms linear;
   }
-  .countdown .ring::after { content: ""; width: 20px; height: 20px; border-radius: 50%; background: var(--panel); }
+  .countdown .ring::after { content: ""; width: 22px; height: 22px; border-radius: 50%; background: var(--panel); }
   .countdown .text { display: flex; flex-direction: column; line-height: 1.25; }
-  .countdown .text b { font-variant-numeric: tabular-nums; font-size: 14px; }
-  .countdown .text span { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .countdown .text b { font-size: 14px; font-weight: 600; }
+  .countdown .text span { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
 
-  /* ---- tabs ---- */
-  nav.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+  /* -------------------------------------------------------------------tabs */
+  nav.tabs { position: relative; display: flex; gap: var(--space-1); border-bottom: 1px solid var(--border); margin-bottom: var(--space-6); }
   nav.tabs button {
     background: none; border: none; color: var(--muted); font: inherit; font-weight: 600;
-    padding: 9px 14px; cursor: pointer; border-bottom: 2px solid transparent; font-size: 13px;
+    padding: var(--space-2) var(--space-4); cursor: pointer; font-size: 13px;
+    transition: color var(--dur-fast) var(--ease);
   }
-  nav.tabs button:hover { color: var(--text); }
-  nav.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav.tabs button:hover { color: var(--text-dim); }
+  nav.tabs button.active { color: var(--text); }
+  .tab-indicator {
+    position: absolute; bottom: -1px; height: 2px; left: 0; width: 0; background: var(--accent);
+    border-radius: 2px 2px 0 0;
+    transition: left var(--dur-fast) var(--ease), width var(--dur-fast) var(--ease);
+  }
   .tab { display: none; }
-  .tab.active { display: block; }
+  .tab.active { display: block; animation: tabIn var(--dur-fast) var(--ease); }
+  @keyframes tabIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-  /* ---- stats ---- */
-  .stats { display: flex; gap: 28px; flex-wrap: wrap; margin-bottom: 18px; }
-  .stat b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
-  .stat span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
-  .stat b.pos { color: var(--buy); } .stat b.neg { color: var(--sell); }
+  /* ------------------------------------------------------------- hero stat */
+  .hero { margin-bottom: var(--space-8); }
+  .hero-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .6px; margin-bottom: var(--space-1); }
+  .hero-value { font-size: clamp(38px, 5.2vw, 54px); font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+  .secondary-stats { display: flex; gap: var(--space-8); margin-top: var(--space-4); flex-wrap: wrap; }
+  .stat b { display: block; font-size: 19px; font-weight: 600; }
+  .stat span { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; }
+  .pos { color: var(--buy); } .neg { color: var(--sell); }
 
-  /* ---- equity curve ---- */
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 22px; }
-  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 0 0 10px; }
-  #equityCurve { width: 100%; height: 140px; display: block; }
-
-  /* ---- holdings ---- */
-  .holding {
-    display: grid; grid-template-columns: 1.3fr 1fr 2fr; gap: 14px;
-    background: var(--panel-2); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px;
-    border-left: 3px solid var(--hold);
+  /* ------------------------------------------------------------- panels -- */
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    padding: var(--space-4) var(--space-4) var(--space-6); margin-bottom: var(--space-6);
+    box-shadow: var(--elevation-2); position: relative;
   }
+  .panel h2 {
+    font-size: 11.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+    margin: 0 0 var(--space-4); display: flex; align-items: center; gap: 6px;
+  }
+  #equityCurveWrap { position: relative; }
+  #equityCurve { width: 100%; height: 160px; display: block; overflow: visible; cursor: crosshair; }
+  .eq-line { transition: stroke var(--dur-fast) var(--ease); }
+  .eq-tooltip {
+    position: absolute; top: 0; pointer-events: none; transform: translate(-50%, -100%);
+    background: #1a212d; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    padding: 6px 10px; font-size: 11.5px; white-space: nowrap; box-shadow: var(--elevation-2);
+    display: none; z-index: 5;
+  }
+  .eq-tooltip b { display: block; font-size: 13px; }
+  .eq-tooltip span { color: var(--muted); font-size: 10.5px; }
+
+  /* ------------------------------------------------------------- holdings */
+  .holding {
+    display: grid; grid-template-columns: 1.3fr 1fr 2fr; gap: var(--space-4); align-items: center;
+    background: var(--panel-2); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-2); border-left: 3px solid var(--hold);
+    box-shadow: var(--elevation-1);
+    transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  }
+  .holding:hover { transform: translateY(-1px); box-shadow: var(--elevation-2); }
   .holding.pos { border-left-color: var(--buy); }
   .holding.neg { border-left-color: var(--sell); }
-  .holding .head { display: flex; align-items: baseline; gap: 8px; }
+  .holding .head { display: flex; align-items: baseline; gap: var(--space-2); }
   .holding .head .sym { font-weight: 700; font-size: 15px; }
-  .holding .head .ac { font-size: 10px; color: var(--muted); text-transform: uppercase; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .holding .head .ac { font-size: 9.5px; color: var(--muted); text-transform: uppercase; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
   .holding .value { font-size: 12px; color: var(--muted); margin-top: 4px; }
-  .holding .value b { color: var(--text); }
-  .holding .pnl { font-size: 12px; }
-  .holding .pnl b { font-size: 16px; display: block; }
-  .holding .pnl b.pos { color: var(--buy); } .holding .pnl b.neg { color: var(--sell); }
-  .returns { display: flex; gap: 10px; flex-wrap: wrap; align-content: center; }
-  .returns .r { text-align: center; min-width: 44px; }
-  .returns .r span { display: block; font-size: 9.5px; color: var(--muted); text-transform: uppercase; }
-  .returns .r b { font-size: 12px; font-variant-numeric: tabular-nums; }
-  .returns .r b.pos { color: var(--buy); } .returns .r b.neg { color: var(--sell); } .returns .r b.nr { color: var(--muted); font-weight: 400; }
-  .empty-note { color: var(--muted); font-style: italic; padding: 10px 2px; }
+  .holding .value b { color: var(--text); font-weight: 600; }
+  .holding .pnl { font-size: 11.5px; display: flex; align-items: center; gap: 10px; }
+  .holding .pnl-figures b { font-size: 17px; display: block; }
+  .spark { width: 56px; height: 22px; flex: none; }
+  .returns { display: flex; gap: var(--space-3); flex-wrap: wrap; align-content: center; }
+  .returns .r { text-align: center; min-width: 42px; }
+  .returns .r span { display: block; font-size: 9px; color: var(--muted); text-transform: uppercase; }
+  .returns .r b { font-size: 12px; }
+  .returns .r b.nr { color: var(--muted); font-weight: 400; }
+  .empty-note { color: var(--muted); font-style: italic; padding: var(--space-3) 2px; }
 
-  /* ---- signals table (Analisi) ---- */
+  /* -------------------------------------------------------- signals table */
   .wrap { overflow-x: auto; }
-  table { border-collapse: collapse; width: 100%; min-width: 760px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); position: sticky; top: 0; background: var(--bg); }
-  .buy { color: var(--buy); } .sell { color: var(--sell); } .hold-txt { color: var(--hold); }
+  table { border-collapse: collapse; width: 100%; min-width: 820px; }
+  th, td { text-align: left; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); position: sticky; top: 0; background: var(--panel); }
+  tbody tr { transition: background var(--dur-fast) var(--ease); }
+  tbody tr:hover { background: rgba(255,255,255,.02); }
+  .action-cell { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  .action-cell.buy { color: var(--buy); } .action-cell.sell { color: var(--sell); } .action-cell.hold { color: var(--hold); font-weight: 500; }
+  .conf-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .conf-dot.high { background: var(--accent); } .conf-dot.mid { background: var(--auto); } .conf-dot.low { background: var(--muted); }
   td.reason { max-width: 480px; font-size: 12.5px; white-space: pre-wrap; }
-  td.reason .headlines { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+  td.reason .override-note {
+    display: inline-flex; align-items: flex-start; gap: 6px; font-size: 11.5px; font-style: normal;
+    padding: 3px 8px; border-radius: var(--radius-sm); margin-bottom: 6px; background: rgba(255,255,255,.04);
+  }
+  td.reason .override-note .icon { margin-top: 2px; }
+  td.reason .override-note.auto { color: var(--auto); }
+  td.reason .override-note.breaker { color: var(--breaker); }
+  td.reason .override-note.override { color: var(--override); }
+  td.reason .headlines { margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+  td.reason .headlines .sub-label, td.reason .positioning .sub-label {
+    display: flex; align-items: center; gap: 5px; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .4px; margin-bottom: 3px;
+  }
+  td.reason .headlines ul { margin: 0; padding-left: 18px; }
   td.reason .headlines li { margin-bottom: 2px; }
-  td.reason .positioning { margin-top: 6px; font-size: 11.5px; color: var(--accent); }
-  .mode-chip { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px; }
-  .mode-chip.REAL { background: rgba(248,81,73,.15); color: var(--live); }
-  .mode-chip.SIMULACIO { background: rgba(63,185,80,.15); color: var(--sim); }
+  td.reason .positioning { margin-top: 8px; font-size: 11.5px; color: var(--accent); }
+  .mode-chip { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px; }
+  .mode-chip.REAL { background: rgba(255,92,114,.14); color: var(--live); }
+  .mode-chip.SIMULACIO { background: rgba(61,220,132,.14); color: var(--sim); }
 
-  /* ---- glossary ---- */
-  dl.glossary dt { font-weight: 700; margin-top: 14px; color: var(--accent); }
+  /* -------------------------------------------------------------- glossary */
+  dl.glossary dt { font-weight: 700; margin-top: var(--space-4); color: var(--accent); }
+  dl.glossary dt:first-child { margin-top: 0; }
   dl.glossary dd { margin: 4px 0 0; color: var(--text); }
 
-  /* ---- inline glossary term + popover ---- */
+  /* --------------------------------------------------- inline term popover */
   .term { border-bottom: 1px dotted var(--muted); cursor: help; }
   #termPopover {
-    position: fixed; max-width: 280px; background: #1c2330; border: 1px solid var(--border);
-    border-radius: 8px; padding: 10px 12px; font-size: 12.5px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
-    z-index: 50; display: none;
+    position: fixed; max-width: 280px; background: #1a212d; border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md); padding: var(--space-3); font-size: 12.5px;
+    box-shadow: var(--elevation-3); z-index: 50; display: none; transform-origin: top left;
   }
+  #termPopover.visible { display: block; animation: popIn var(--dur-fast) var(--ease); }
+  @keyframes popIn { from { opacity: 0; transform: scale(.96) translateY(-2px); } to { opacity: 1; transform: scale(1) translateY(0); } }
   #termPopover b { display: block; color: var(--accent); margin-bottom: 4px; text-transform: capitalize; }
 
-  footer { margin-top: 30px; color: var(--muted); font-size: 11px; }
+  footer { margin-top: var(--space-8); color: var(--muted); font-size: 11px; }
 </style>
 </head>
 <body>
 
+<!-- Icon sprite: one small, consistent stroke-based icon language for the whole
+     page instead of emoji (which render inconsistently across platforms/fonts). -->
+<svg style="position:absolute; width:0; height:0" aria-hidden="true">
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.3 2"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M4 17l6-6 4 4 6-9"/><path d="M14 6h6v6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M4 7l6 6 4-4 6 9"/><path d="M14 18h6v-6"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 5-3.4 8.4-7 9-3.6-.6-7-4-7-9V6l7-3z"/></symbol>
+  <symbol id="i-news" viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="14" rx="1.5"/><path d="M17 9h4v9a2 2 0 0 1-2 2H7"/><line x1="6" y1="9" x2="12" y2="9"/><line x1="6" y1="12.5" x2="14" y2="12.5"/><line x1="6" y1="16" x2="11" y2="16"/></symbol>
+  <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1"/></symbol>
+</svg>
+
 <header>
   <h1>TradingBot v2 <span>&mdash; Fase 3</span></h1>
-  <span id="modeBadge" class="mode-badge sim">&mdash;</span>
+  <span id="modeBadge" class="mode-badge sim"><span class="dot"></span>&mdash;</span>
   <div id="countdown" class="countdown">
     <div class="ring" style="--pct:0"></div>
-    <div class="text"><b id="countdownTime">&mdash;</b><span>Proxima analisi</span></div>
+    <div class="text"><b id="countdownTime" class="mono">&mdash;</b><span>Proxima analisi</span></div>
   </div>
   <div id="clocks" class="clocks"></div>
 </header>
 
-<nav class="tabs">
+<nav class="tabs" id="tabsNav">
   <button data-tab="resum" class="active">Resum</button>
   <button data-tab="analisi">Analisi</button>
   <button data-tab="significats">Significats</button>
+  <span class="tab-indicator" id="tabIndicator"></span>
 </nav>
 
 <!-- ================================================================ Resum -->
 <section id="tab-resum" class="tab active">
-  <div class="stats">
-    <div class="stat"><b id="equity">&mdash;</b><span>Patrimoni total</span></div>
-    <div class="stat"><b id="count">&mdash;</b><span>Senyals</span></div>
-    <div class="stat"><b id="pnl">&mdash;</b><span>P&amp;L realitzat</span></div>
+  <div class="hero">
+    <div class="hero-label">Patrimoni total</div>
+    <div class="hero-value mono" id="equity">&mdash;</div>
+    <div class="secondary-stats">
+      <div class="stat"><b class="mono" id="count">&mdash;</b><span>Senyals</span></div>
+      <div class="stat"><b class="mono" id="pnl">&mdash;</b><span>P&amp;L realitzat</span></div>
+    </div>
+  </div>
+
+  <div class="panel" id="equityCurveWrap">
+    <h2><svg class="icon"><use href="#i-up"/></svg>Corba de patrimoni</h2>
+    <svg id="equityCurve" viewBox="0 0 680 160" preserveAspectRatio="none"></svg>
+    <div class="eq-tooltip" id="eqTooltip"></div>
   </div>
 
   <div class="panel">
-    <h2>Corba de patrimoni</h2>
-    <svg id="equityCurve" viewBox="0 0 680 140" preserveAspectRatio="none"></svg>
-  </div>
-
-  <div class="panel">
-    <h2>Posicions obertes</h2>
+    <h2><svg class="icon"><use href="#i-wallet"/></svg>Posicions obertes</h2>
     <div id="holdings"></div>
   </div>
 </section>
 
 <!-- =============================================================== Analisi -->
 <section id="tab-analisi" class="tab">
-  <div class="wrap"><table>
-    <thead><tr>
-      <th>Data</th><th>Simbol</th><th>Mode</th><th>Accio</th><th>Model</th><th>Conf.</th>
-      <th>Mida %</th><th>Preu</th><th>Exec.</th><th>P&amp;L</th><th>Analisi completa</th>
-    </tr></thead>
-    <tbody id="rows"></tbody>
-  </table></div>
+  <div class="panel">
+    <div class="wrap"><table>
+      <thead><tr>
+        <th>Data</th><th>Simbol</th><th>Mode</th><th>Accio</th><th>Model</th><th>Conf.</th>
+        <th>Mida %</th><th>Preu</th><th>Exec.</th><th>P&amp;L</th><th>Analisi completa</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </div>
 </section>
 
 <!-- =========================================================== Significats -->
 <section id="tab-significats" class="tab">
-  <dl class="glossary" id="glossaryList"></dl>
+  <div class="panel">
+    <dl class="glossary" id="glossaryList"></dl>
+  </div>
 </section>
 
 <div id="termPopover"></div>
@@ -204,6 +333,17 @@
 <footer>Dades generades pel pipeline TradingBot. Actualitzacio automatica cada <span id="refreshSecs">45</span>s.</footer>
 
 <script>
+// Respect prefers-reduced-motion for the JS-driven parts too (CSS transitions/
+// animations are already neutralised globally above) -- number tweening below
+// jumps straight to the target value instead of running its own rAF loop.
+const REDUCE_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function escapeHtml(str) {
+  return String(str == null ? '' : str).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
 // ============================================================== glossary ===
 // Single source of truth: both the Significats tab and every inline <span
 // class="term"> elsewhere in this page read from GLOSSARY, so a definition is
@@ -244,7 +384,7 @@ function renderGlossaryTab() {
   const pop = document.getElementById('termPopover');
   document.addEventListener('click', (e) => {
     const el = e.target.closest('.term');
-    if (!el) { pop.style.display = 'none'; return; }
+    if (!el) { pop.classList.remove('visible'); return; }
     const key = el.dataset.term;
     const def = GLOSSARY[key];
     if (!def) return;
@@ -254,19 +394,33 @@ function renderGlossaryTab() {
     const left = Math.min(rect.left, window.innerWidth - 300);
     pop.style.top = top + 'px';
     pop.style.left = Math.max(8, left) + 'px';
-    pop.style.display = 'block';
+    pop.classList.add('visible');
     e.stopPropagation();
   });
 })();
 
 // ================================================================== tabs ===
+function moveTabIndicator(btn) {
+  const nav = document.getElementById('tabsNav');
+  const indicator = document.getElementById('tabIndicator');
+  const navRect = nav.getBoundingClientRect();
+  const btnRect = btn.getBoundingClientRect();
+  indicator.style.left = (btnRect.left - navRect.left) + 'px';
+  indicator.style.width = btnRect.width + 'px';
+}
+
 document.querySelectorAll('nav.tabs button').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    moveTabIndicator(btn);
   });
+});
+window.addEventListener('resize', () => {
+  const active = document.querySelector('nav.tabs button.active');
+  if (active) moveTabIndicator(active);
 });
 
 // ================================================================== CSV  ===
@@ -290,42 +444,195 @@ function parseCSV(text) {
 function fmtMoney(n) {
   return isFinite(n) ? '$' + n.toLocaleString('ca-ES', { maximumFractionDigits: 2, minimumFractionDigits: 2 }) : '—';
 }
-
+function fmtMoneySigned(n) {
+  if (!isFinite(n)) return '—';
+  return (n < 0 ? '-' : '+') + '$' + Math.abs(n).toLocaleString('ca-ES', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+}
 function fmtPct(n, digits) {
   digits = digits === undefined ? 2 : digits;
-  if (n === null || n === undefined || !isFinite(n)) return term('nr', 'NR');
+  if (n === null || n === undefined || !isFinite(n)) return `<b class="nr mono">${term('nr', 'NR')}</b>`;
   const cls = n > 0 ? 'pos' : n < 0 ? 'neg' : '';
-  return `<b class="${cls}">${n >= 0 ? '+' : ''}${n.toFixed(digits)}%</b>`;
+  return `<b class="${cls} mono">${n >= 0 ? '+' : ''}${n.toFixed(digits)}%</b>`;
+}
+
+// ======================================================== number tweening ==
+// Numbers that update (equity, P&L, holdings) count/tween to their new value
+// instead of snapping instantly. State lives here (not in the DOM) because the
+// holdings list and table are fully re-rendered from scratch on every refresh,
+// not diffed -- keying the "previous value" cache by a stable id sidesteps that.
+const _prevValues = Object.create(null);
+const NUMBER_FORMATTERS = {
+  money: fmtMoney,
+  moneySigned: fmtMoneySigned,
+  int: v => Math.round(v).toLocaleString('ca-ES'),
+};
+
+function tweenNumber(el, key, toValue, formatterKey, duration) {
+  if (!el || !isFinite(toValue)) return;
+  duration = duration || 520;
+  const format = NUMBER_FORMATTERS[formatterKey];
+  const from = key in _prevValues ? _prevValues[key] : toValue;
+  _prevValues[key] = toValue;
+
+  if (REDUCE_MOTION || from === toValue) {
+    el.textContent = format(toValue);
+    return;
+  }
+  const start = performance.now();
+  function frame(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+    el.textContent = format(from + (toValue - from) * eased);
+    if (t < 1) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+// A generic helper for numbers embedded inside innerHTML-rendered blocks (the
+// holdings list): render with data-anim/data-target/data-fmt placeholders, then
+// wire them up in one pass right after insertion.
+function wireAnimatedNumbers(container) {
+  container.querySelectorAll('[data-anim]').forEach(el => {
+    const raw = parseFloat(el.dataset.target);
+    tweenNumber(el, el.dataset.anim, raw, el.dataset.fmt, el.dataset.dur ? +el.dataset.dur : undefined);
+  });
 }
 
 // ============================================================ equity curve =
-function renderEquityCurve(rows) {
+// Monotone cubic interpolation (Fritsch-Carlson) -- smooth through the points
+// without the overshoot a plain Catmull-Rom spline would introduce, which
+// matters here: an overshoot on a flat equity curve would draw a fake bump.
+function monotoneTangents(xs, ys) {
+  const n = xs.length;
+  const d = [];
+  for (let i = 0; i < n - 1; i++) d.push((ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]));
+  const m = new Array(n);
+  m[0] = d[0]; m[n - 1] = d[n - 2];
+  for (let i = 1; i < n - 1; i++) m[i] = (d[i - 1] * d[i] <= 0) ? 0 : (d[i - 1] + d[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (d[i] === 0) { m[i] = 0; m[i + 1] = 0; continue; }
+    const a = m[i] / d[i], b = m[i + 1] / d[i];
+    const s = a * a + b * b;
+    if (s > 9) {
+      const tau = 3 / Math.sqrt(s);
+      m[i] = tau * a * d[i];
+      m[i + 1] = tau * b * d[i];
+    }
+  }
+  return m;
+}
+
+function monotonePath(xs, ys) {
+  const m = monotoneTangents(xs, ys);
+  let d = `M ${xs[0].toFixed(2)},${ys[0].toFixed(2)}`;
+  for (let i = 0; i < xs.length - 1; i++) {
+    const dx = (xs[i + 1] - xs[i]) / 3;
+    const c1x = xs[i] + dx, c1y = ys[i] + m[i] * dx;
+    const c2x = xs[i + 1] - dx, c2y = ys[i + 1] - m[i + 1] * dx;
+    d += ` C ${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${xs[i + 1].toFixed(2)},${ys[i + 1].toFixed(2)}`;
+  }
+  return d;
+}
+
+let curveState = { points: [], xs: [], ys: [], W: 680, H: 160 };
+let equityCurveDrawnOnce = false;
+
+function renderEquityCurve(data) {
   const svg = document.getElementById('equityCurve');
-  const points = rows.map(r => parseFloat(r.account_equity_usd)).filter(v => isFinite(v));
-  if (points.length < 2) { svg.innerHTML = ''; return; }
+  const points = data
+    .map(r => ({ t: r.timestamp, v: parseFloat(r.account_equity_usd) }))
+    .filter(p => isFinite(p.v));
+  if (points.length < 2) { svg.innerHTML = ''; curveState = { points: [], xs: [], ys: [], W: 680, H: 160 }; return; }
 
-  const W = 680, H = 140, PAD = 6;
-  const min = Math.min(...points), max = Math.max(...points);
+  const W = 680, H = 160, PAD_X = 6, PAD_Y = 12;
+  const values = points.map(p => p.v);
+  const min = Math.min(...values), max = Math.max(...values);
   const span = (max - min) || 1;
-  const x = i => PAD + (i / (points.length - 1)) * (W - PAD * 2);
-  const y = v => H - PAD - ((v - min) / span) * (H - PAD * 2);
+  const xs = points.map((_, i) => PAD_X + (i / (points.length - 1)) * (W - PAD_X * 2));
+  const ys = points.map(p => H - PAD_Y - ((p.v - min) / span) * (H - PAD_Y * 2));
 
-  const line = points.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' L ');
-  const area = `M ${x(0)},${H} L ${line.split(' L ').join(' L ')} L ${x(points.length - 1)},${H} Z`;
-  const rising = points[points.length - 1] >= points[0];
-  const stroke = rising ? '#3fb950' : '#f85149';
+  curveState = { points, xs, ys, W, H };
+
+  const linePath = monotonePath(xs, ys);
+  const areaPath = `${linePath} L ${xs[xs.length - 1].toFixed(2)},${H} L ${xs[0].toFixed(2)},${H} Z`;
+  const rising = values[values.length - 1] >= values[0];
+  const strokeHex = rising ? '#3ddc84' : '#ff5c72';
 
   svg.innerHTML = `
-    <defs>
-      <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="${stroke}" stop-opacity="0.28"/>
-        <stop offset="100%" stop-color="${stroke}" stop-opacity="0"/>
-      </linearGradient>
-    </defs>
-    <path d="${area}" fill="url(#eqFill)" stroke="none"/>
-    <path d="M ${line}" fill="none" stroke="${stroke}" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    <defs><linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${strokeHex}" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="${strokeHex}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path class="eq-area" d="${areaPath}" fill="url(#eqFill)" stroke="none"/>
+    <path class="eq-line" d="${linePath}" fill="none" stroke="${strokeHex}" stroke-width="2.25" vector-effect="non-scaling-stroke"/>
+    <circle class="eq-dot" r="4" fill="${strokeHex}" style="display:none"/>
   `;
+
+  // Draw-in animation only on the very first successful render (page load) --
+  // redoing it on every 45s refresh would be motion for motion's sake, not the
+  // "sparingly" this pass asks for.
+  if (!equityCurveDrawnOnce && !REDUCE_MOTION) {
+    const lineEl = svg.querySelector('.eq-line');
+    const len = lineEl.getTotalLength();
+    lineEl.style.strokeDasharray = String(len);
+    lineEl.style.strokeDashoffset = String(len);
+    lineEl.getBoundingClientRect(); // force reflow so the transition below applies
+    lineEl.style.transition = `stroke-dashoffset ${560}ms var(--ease)`;
+    requestAnimationFrame(() => { lineEl.style.strokeDashoffset = '0'; });
+  }
+  equityCurveDrawnOnce = true;
 }
+
+// Hover tooltip: listeners attached once (the <svg> node itself survives every
+// re-render, only its children are replaced), reading live state from
+// `curveState` so they always reflect the latest data.
+(function wireEquityTooltip() {
+  const svg = document.getElementById('equityCurve');
+  const tooltip = document.getElementById('eqTooltip');
+
+  function handleMove(evt) {
+    const { points, xs, ys, W } = curveState;
+    if (!points.length) return;
+    const dot = svg.querySelector('.eq-dot');
+    if (!dot) return;
+
+    const rect = svg.getBoundingClientRect();
+    const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+    const relX = ((clientX - rect.left) / rect.width) * W;
+
+    let idx = 0, best = Infinity;
+    for (let i = 0; i < xs.length; i++) {
+      const dist = Math.abs(xs[i] - relX);
+      if (dist < best) { best = dist; idx = i; }
+    }
+
+    dot.setAttribute('cx', xs[idx]);
+    dot.setAttribute('cy', ys[idx]);
+    dot.style.display = 'block';
+
+    const p = points[idx];
+    const date = new Date(p.t);
+    const dateLabel = isNaN(date)
+      ? (p.t || '').slice(0, 16).replace('T', ' ')
+      : date.toLocaleString('ca-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+    tooltip.innerHTML = `<b class="mono">${fmtMoney(p.v)}</b><span>${dateLabel}</span>`;
+    tooltip.style.display = 'block';
+    const left = (xs[idx] / W) * rect.width;
+    tooltip.style.left = Math.min(Math.max(left, 44), rect.width - 44) + 'px';
+  }
+
+  function handleLeave() {
+    const dot = svg.querySelector('.eq-dot');
+    if (dot) dot.style.display = 'none';
+    tooltip.style.display = 'none';
+  }
+
+  svg.addEventListener('mousemove', handleMove);
+  svg.addEventListener('mouseleave', handleLeave);
+  svg.addEventListener('touchmove', handleMove, { passive: true });
+  svg.addEventListener('touchend', handleLeave);
+})();
 
 // =============================================================== holdings ==
 const RETURN_WINDOWS = [
@@ -333,7 +640,30 @@ const RETURN_WINDOWS = [
   ['return_1y_pct', '1a'], ['return_3y_pct', '3a'], ['return_6y_pct', '6a'],
 ];
 
-function renderHoldings(positions) {
+// A tiny inline sparkline from data already on the page (signals.csv logs
+// current_price for every symbol on every 4h cycle, since every configured
+// symbol is evaluated -- and logged -- whether it holds, buys, or sells). No
+// new backend call, no new export.
+function sparkline(values, colorVar) {
+  if (values.length < 2) return '';
+  const w = 56, h = 22, pad = 2;
+  const min = Math.min(...values), max = Math.max(...values);
+  const span = (max - min) || 1;
+  const pts = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (w - 2 * pad);
+    const y = h - pad - ((v - min) / span) * (h - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polyline points="${pts}" fill="none" stroke="${colorVar}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function sanitizeId(symbol) {
+  return symbol.replace(/[^A-Za-z0-9]/g, '_');
+}
+
+function renderHoldings(positions, priceSeriesBySymbol) {
   const el = document.getElementById('holdings');
   if (!positions || !positions.length) {
     el.innerHTML = `<div class="empty-note">No hi ha cap posicio oberta actualment.</div>`;
@@ -341,38 +671,52 @@ function renderHoldings(positions) {
   }
 
   el.innerHTML = positions.map(p => {
+    const id = sanitizeId(p.symbol);
     const invested = p.qty * p.avg_entry_price;
-    const currentValue = p.unrealized_pnl_usd !== null && p.unrealized_pnl_usd !== undefined
-      ? invested + p.unrealized_pnl_usd : null;
-    const pnlCls = p.unrealized_pnl_usd > 0 ? 'pos' : p.unrealized_pnl_usd < 0 ? 'neg' : '';
-    const rowCls = p.unrealized_pnl_usd > 0 ? 'pos' : p.unrealized_pnl_usd < 0 ? 'neg' : '';
+    const hasPnl = p.unrealized_pnl_usd !== null && p.unrealized_pnl_usd !== undefined;
+    const currentValue = hasPnl ? invested + p.unrealized_pnl_usd : null;
+    const pnlCls = hasPnl ? (p.unrealized_pnl_usd > 0 ? 'pos' : p.unrealized_pnl_usd < 0 ? 'neg' : '') : '';
+    const sparkColor = pnlCls === 'pos' ? 'var(--buy)' : pnlCls === 'neg' ? 'var(--sell)' : 'var(--muted)';
 
     const returns = RETURN_WINDOWS.map(([key, label]) => `
       <div class="r"><span>${label}</span>${fmtPct(p[key], 1)}</div>
     `).join('');
 
     const valueLine = currentValue !== null
-      ? `${fmtMoney(invested)} invertits &rarr; <b>${fmtMoney(currentValue)}</b> ara`
+      ? `${fmtMoney(invested)} invertits &rarr; <b class="mono" data-anim="hold:${id}:value" data-target="${currentValue}" data-fmt="money">${fmtMoney(currentValue)}</b> ara`
       : `${fmtMoney(invested)} invertits`;
 
+    const series = (priceSeriesBySymbol[p.symbol] || []);
+    const sparkHtml = sparkline(series, sparkColor);
+
+    const pctHtml = (p.unrealized_pnl_pct !== null && p.unrealized_pnl_pct !== undefined)
+      ? `<b class="${pnlCls} mono" data-anim="hold:${id}:pct" data-target="${p.unrealized_pnl_pct}" data-fmt="pctSignedInline">${(p.unrealized_pnl_pct >= 0 ? '+' : '') + p.unrealized_pnl_pct.toFixed(2)}%</b>`
+      : `<b class="mono">&mdash;</b>`;
+    const usdHtml = hasPnl
+      ? `<span class="mono" data-anim="hold:${id}:usd" data-target="${p.unrealized_pnl_usd}" data-fmt="moneySigned">${fmtMoneySigned(p.unrealized_pnl_usd)}</span>`
+      : '';
+
     return `
-      <div class="holding ${rowCls}">
+      <div class="holding ${pnlCls}">
         <div>
-          <div class="head"><span class="sym">${p.symbol}</span><span class="ac">${p.asset_class}</span></div>
+          <div class="head"><span class="sym">${escapeHtml(p.symbol)}</span><span class="ac">${escapeHtml(p.asset_class)}</span></div>
           <div class="value">${valueLine}</div>
         </div>
         <div class="pnl">
-          <b class="${pnlCls}">${p.unrealized_pnl_pct !== null && p.unrealized_pnl_pct !== undefined
-            ? (p.unrealized_pnl_pct >= 0 ? '+' : '') + p.unrealized_pnl_pct.toFixed(2) + '%' : '—'}</b>
-          ${p.unrealized_pnl_usd !== null && p.unrealized_pnl_usd !== undefined
-            ? (p.unrealized_pnl_usd >= 0 ? '+' : '') + fmtMoney(p.unrealized_pnl_usd).slice(1) : ''}
-          ${term('p&l no realitzat', 'P&amp;L no realitzat')}
+          ${sparkHtml}
+          <div class="pnl-figures">
+            ${pctHtml}
+            ${usdHtml}
+          </div>
         </div>
         <div class="returns">${returns}</div>
       </div>
     `;
   }).join('');
+
+  wireAnimatedNumbers(el);
 }
+NUMBER_FORMATTERS.pctSignedInline = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 
 // =============================================================== clocks ====
 // Only shown for asset classes actually held right now, read fresh from
@@ -401,11 +745,11 @@ function renderClocks(positions) {
 
   if (hasCrypto) {
     const utc = new Intl.DateTimeFormat('ca-ES', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', hour12: false }).format(now);
-    chips.push(`<div class="clock"><span class="dot open"></span><span class="label">${term('spot', 'Cripto')}</span><b>${utc} UTC</b></div>`);
+    chips.push(`<div class="clock"><svg class="icon"><use href="#i-clock"/></svg><span class="dot open"></span><span class="label">${term('spot', 'Cripto')}</span><b class="mono">${utc} UTC</b></div>`);
   }
   if (hasEquity) {
     const nyse = nyseStatus(now);
-    chips.push(`<div class="clock"><span class="dot ${nyse.open ? 'open' : 'closed'}"></span><span class="label">NYSE</span><b>${nyse.label}</b></div>`);
+    chips.push(`<div class="clock"><svg class="icon"><use href="#i-clock"/></svg><span class="dot ${nyse.open ? 'open' : 'closed'}"></span><span class="label">NYSE</span><b class="mono">${nyse.label}</b></div>`);
   }
   el.innerHTML = chips.join('');
 }
@@ -413,7 +757,12 @@ function renderClocks(positions) {
 // ============================================================= countdown ===
 // Same cron this dashboard's cycle actually runs on: every 4h, on the hour
 // (see .github/workflows/trading_bot.yml). Purely a presentation layer over
-// that fixed schedule -- it does not trigger anything itself.
+// that fixed schedule -- it does not trigger anything itself. The ring's sweep
+// is a CSS transition on --pct (registered via @property above so browsers
+// that support it animate the conic-gradient smoothly); this is a live,
+// once-a-second clock, not decorative motion, so it is not gated on
+// prefers-reduced-motion -- only its cosmetic sweep easing is (via the global
+// transition-duration override).
 const CYCLE_HOURS = 4;
 function updateCountdown() {
   const now = new Date();
@@ -436,29 +785,66 @@ setInterval(updateCountdown, 1000);
 updateCountdown();
 
 // ============================================================= main load ===
+const ACTION_ICON = { buy: 'i-up', sell: 'i-down', hold: 'i-minus' };
+
+function confidenceBand(c) {
+  if (!isFinite(c)) return null;
+  if (c >= 0.7) return 'high';
+  if (c >= 0.4) return 'mid';
+  return 'low';
+}
+
+function overrideKind(overrideReason) {
+  if (!overrideReason) return null;
+  const lower = overrideReason.toLowerCase();
+  if (lower.includes('automatic exit')) return { icon: 'i-bolt', iconFill: true, cls: 'auto' };
+  if (lower.includes('circuit breaker')) return { icon: 'i-shield', cls: 'breaker' };
+  return { icon: 'i-shield', cls: 'override' };
+}
+
 function renderAnalisi(data) {
   document.getElementById('rows').innerHTML = data.slice().reverse().map(r => {
     let headlines = [];
     try { headlines = JSON.parse(r.recent_headlines || '[]'); } catch (e) { headlines = []; }
     const headlinesHtml = headlines.length
-      ? `<ul class="headlines">${headlines.map(h => `<li>${h}</li>`).join('')}</ul>` : '';
+      ? `<div class="headlines"><div class="sub-label"><svg class="icon"><use href="#i-news"/></svg>Titulars</div>
+         <ul>${headlines.map(h => `<li>${escapeHtml(h)}</li>`).join('')}</ul></div>`
+      : '';
     const positioningHtml = r.market_positioning
-      ? `<div class="positioning">${r.market_positioning}</div>` : '';
+      ? `<div class="positioning"><div class="sub-label"><svg class="icon"><use href="#i-wallet"/></svg>Posicionament</div>${escapeHtml(r.market_positioning)}</div>`
+      : '';
     const modeChip = r.mode ? `<span class="mode-chip ${r.mode}">${r.mode}</span>` : '';
+
+    const kind = overrideKind(r.override_reason);
+    const overrideHtml = r.override_reason
+      ? `<div class="override-note ${kind ? kind.cls : ''}">${kind ? `<svg class="icon${kind.iconFill ? ' icon-fill' : ''}"><use href="#${kind.icon}"/></svg>` : ''}<span>${escapeHtml(r.override_reason)}</span></div>`
+      : '';
+
+    const action = (r.action || '').toLowerCase();
+    const actionIcon = ACTION_ICON[action];
+    const actionHtml = action
+      ? `<span class="action-cell ${action}">${actionIcon ? `<svg class="icon"><use href="#${actionIcon}"/></svg>` : ''}${escapeHtml(action)}</span>`
+      : '';
+
+    const conf = r.confidence ? +r.confidence : NaN;
+    const band = confidenceBand(conf);
+    const confHtml = isFinite(conf)
+      ? `${band ? `<span class="conf-dot ${band}"></span>` : ''}<span class="mono">${conf.toFixed(2)}</span>`
+      : '';
 
     return `
     <tr>
-      <td>${(r.timestamp || '').slice(0, 16).replace('T', ' ')}</td>
-      <td>${r.symbol || ''}</td>
+      <td class="mono">${(r.timestamp || '').slice(0, 16).replace('T', ' ')}</td>
+      <td>${escapeHtml(r.symbol || '')}</td>
       <td>${modeChip}</td>
-      <td class="${r.action || ''}">${r.action || ''}</td>
-      <td class="hold-txt">${r.raw_action || ''}</td>
-      <td>${r.confidence ? (+r.confidence).toFixed(2) : ''}</td>
-      <td>${r.position_size_pct ? (+r.position_size_pct).toFixed(2) : ''}</td>
-      <td>${r.current_price ? (+r.current_price).toFixed(2) : ''}</td>
-      <td>${r.execution_status || ''}</td>
-      <td>${r.realized_pnl_usd ? (+r.realized_pnl_usd).toFixed(2) : ''}</td>
-      <td class="reason">${r.override_reason ? '<i>' + r.override_reason + '</i><br>' : ''}${r.reasoning || ''}${headlinesHtml}${positioningHtml}</td>
+      <td>${actionHtml}</td>
+      <td class="mono" style="color:var(--muted)">${escapeHtml(r.raw_action || '')}</td>
+      <td>${confHtml}</td>
+      <td class="mono">${r.position_size_pct ? (+r.position_size_pct).toFixed(2) : ''}</td>
+      <td class="mono">${r.current_price ? (+r.current_price).toFixed(2) : ''}</td>
+      <td>${escapeHtml(r.execution_status || '')}</td>
+      <td class="mono">${r.realized_pnl_usd ? (+r.realized_pnl_usd).toFixed(2) : ''}</td>
+      <td class="reason">${overrideHtml}${escapeHtml(r.reasoning || '')}${headlinesHtml}${positioningHtml}</td>
     </tr>`;
   }).join('');
 }
@@ -466,22 +852,34 @@ function renderAnalisi(data) {
 function renderResum(data, positionsPayload) {
   const newest = data[data.length - 1];
   const eq = parseFloat(newest.account_equity_usd);
-  document.getElementById('equity').textContent = isFinite(eq) ? fmtMoney(eq) : '—';
-  document.getElementById('count').textContent = data.length;
+  tweenNumber(document.getElementById('equity'), 'equity', eq, 'money');
+  tweenNumber(document.getElementById('count'), 'count', data.length, 'int');
+
   const pnl = data.reduce((s, r) => s + (parseFloat(r.realized_pnl_usd) || 0), 0);
   const pnlEl = document.getElementById('pnl');
-  pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
-  pnlEl.className = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
+  tweenNumber(pnlEl, 'pnl', pnl, 'moneySigned');
+  pnlEl.className = 'mono ' + (pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '');
 
   renderEquityCurve(data);
 
   const isLive = positionsPayload ? !!positionsPayload.is_live : false;
   const badge = document.getElementById('modeBadge');
-  badge.textContent = isLive ? 'REAL' : 'SIMULACIO';
+  badge.innerHTML = '<span class="dot"></span>' + (isLive ? 'REAL' : 'SIMULACIO');
   badge.className = 'mode-badge ' + (isLive ? 'live' : 'sim');
 
   const positions = positionsPayload ? positionsPayload.positions : [];
-  renderHoldings(positions);
+
+  // Per-symbol price history for the holdings sparklines, built from data
+  // already on the page (see the sparkline() comment) -- no extra fetch.
+  const priceSeriesBySymbol = {};
+  for (const p of positions) {
+    priceSeriesBySymbol[p.symbol] = data
+      .filter(r => r.symbol === p.symbol)
+      .map(r => parseFloat(r.current_price))
+      .filter(v => isFinite(v));
+  }
+
+  renderHoldings(positions, priceSeriesBySymbol);
   renderClocks(positions);
 }
 
@@ -510,9 +908,10 @@ async function loadAll() {
 }
 
 renderGlossaryTab();
+moveTabIndicator(document.querySelector('nav.tabs button.active'));
 loadAll().catch(e => {
   document.getElementById('rows').innerHTML =
-    '<tr><td colspan="11">No s\'ha pogut carregar signals.csv: ' + e + '</td></tr>';
+    '<tr><td colspan="11">No s\'ha pogut carregar signals.csv: ' + escapeHtml(String(e)) + '</td></tr>';
 });
 setInterval(() => loadAll().catch(() => {}), REFRESH_MS);
 </script>
