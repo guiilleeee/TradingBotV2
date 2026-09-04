@@ -472,6 +472,10 @@ def main() -> int:
     parser.add_argument("--starting-equity", type=float, default=backtest.DEFAULT_STARTING_EQUITY)
     parser.add_argument("--config", default=main_module.DEFAULT_CONFIG_PATH)
     parser.add_argument("--db", default=DEFAULT_DB_PATH)
+    parser.add_argument(
+        "--report-json", default=None,
+        help="Also write the full report dict (incl. equity_screening_history and cost) as JSON to this path",
+    )
     args = parser.parse_args()
 
     config = main_module.load_config(args.config, None)
@@ -479,11 +483,19 @@ def main() -> int:
     end = date.fromisoformat(args.end)
     crypto_symbols = [s.strip() for s in args.crypto_symbols.split(",") if s.strip()]
 
-    run_backtest_with_rotating_screening(
+    report = run_backtest_with_rotating_screening(
         start=start, end=end, config=config, crypto_symbols=crypto_symbols,
         equity_count=args.equity_count, provider=args.provider, model=args.model,
         starting_equity=args.starting_equity, db_path=args.db,
     )
+
+    if args.report_json:
+        import json
+
+        with open(args.report_json, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, default=str)
+        print(f"Wrote full report JSON to {args.report_json}")
+
     return 0
 
 

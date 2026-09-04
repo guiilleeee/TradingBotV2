@@ -1,0 +1,90 @@
+name: Historical-screening backtest (manual, one-off)
+
+# Manual only -- this spends real money on real model calls (same cost model
+# as backtest.py itself). Never runs on a schedule; only workflow_dispatch,
+# triggered deliberately when a real result is actually wanted.
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Start date (YYYY-MM-DD)"
+        required: true
+        default: "2026-03-04"
+      end:
+        description: "End date (YYYY-MM-DD)"
+        required: true
+        default: "2026-09-03"
+      provider:
+        description: "Model provider"
+        required: true
+        default: "claude"
+        type: choice
+        options: ["claude", "gemini"]
+      model:
+        description: "Model id (blank = provider's cheap eval default, e.g. claude-haiku-4-5)"
+        required: false
+        default: ""
+      crypto_symbols:
+        description: "Comma-separated, held fixed (not re-screened -- see module docstring)"
+        required: true
+        default: "BTC-USD,ETH-USD,SOL-USD"
+      equity_count:
+        description: "Equities re-screened per week"
+        required: true
+        default: "5"
+      starting_equity:
+        description: "Starting equity (USD)"
+        required: true
+        default: "10000"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-screening-backtest
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run historical-screening backtest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          MODEL_ARG=""
+          if [ -n "${{ inputs.model }}" ]; then MODEL_ARG="--model ${{ inputs.model }}"; fi
+          python backtest_historical_screening.py \
+            --start "${{ inputs.start }}" \
+            --end "${{ inputs.end }}" \
+            --provider "${{ inputs.provider }}" \
+            $MODEL_ARG \
+            --crypto-symbols "${{ inputs.crypto_symbols }}" \
+            --equity-count "${{ inputs.equity_count }}" \
+            --starting-equity "${{ inputs.starting_equity }}" \
+            --db backtest_historical_screening.db \
+            --report-json report.json
+
+      - name: Upload report + db as build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-screening-backtest-result
+          path: |
+            report.json
+            backtest_historical_screening.db
+          retention-days: 30
