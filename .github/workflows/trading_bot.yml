@@ -63,14 +63,46 @@ jobs:
 
       - name: Commit results
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f docs/index.html docs/signals.csv docs/config.yaml signals.csv trading_bot.db
           # positions.json export is non-fatal in main.py, so it may be absent.
           [ -f positions.json ] && git add -f positions.json docs/positions.json || true
+
           if git diff --staged --quiet; then
             echo "Nothing changed this cycle."
-          else
-            git commit -m "chore: trading cycle results [skip ci]"
-            git push
+            exit 0
           fi
+
+          git commit -m "chore: trading cycle results [skip ci]"
+
+          # The concurrency group above only serializes this workflow's own runs
+          # against each other -- it does nothing to protect against an unrelated
+          # push (a manual web-UI edit, weekly_screening.yml, refresh_positions.yml,
+          # ...) landing on main between this job's checkout and its own push.
+          # Retry pull --rebase + push a bounded number of times rather than
+          # failing outright the moment the remote has moved.
+          max_attempts=3
+          attempt=1
+          while true; do
+            if git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+
+            if [ "$attempt" -ge "$max_attempts" ]; then
+              echo "::error::git push failed after $max_attempts attempts -- giving up. This cycle's results are committed in this job's checkout but not published; the next scheduled run starts from a fresh checkout of main regardless, so no data is lost, but this cycle's export never reaches docs/. Check what is actually racing this workflow's pushes."
+              exit 1
+            fi
+
+            echo "git push rejected (attempt $attempt/$max_attempts) -- the remote has moved. Rebasing onto it and retrying."
+            if ! git pull --rebase; then
+              echo "::error::git pull --rebase hit a real conflict, not just a fast-forward -- aborting the rebase cleanly rather than leaving the checkout half-rebased."
+              git rebase --abort 2>/dev/null || true
+              exit 1
+            fi
+
+            attempt=$((attempt + 1))
+            sleep 5
+          done
