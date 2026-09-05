@@ -73,6 +73,7 @@ import backtest
 import equity_universe
 import main as main_module
 import mode
+import risk_manager
 from models import AssetClass
 
 DEFAULT_DB_PATH = "backtest_historical_screening.db"
@@ -360,6 +361,9 @@ def run_backtest_with_rotating_screening(
     circuit_breaker_loss_pct = float(config.get("circuit_breaker_loss_pct", 3.0))
     max_risk_pct = float(config.get("max_risk_pct", 1.0))
     max_absolute_position_pct = float(config.get("max_absolute_position_pct", 20.0))
+    min_reward_risk_ratio = float(
+        config.get("min_reward_risk_ratio", risk_manager.DEFAULT_MIN_REWARD_RISK_RATIO)
+    )
 
     print(f"=== Historical-screening backtest | {start} .. {end} | provider={provider} model={model} ===")
     for item in backtest.LIMITATIONS + ADDITIONAL_LIMITATIONS:
@@ -427,6 +431,7 @@ def run_backtest_with_rotating_screening(
                 mode_settings=mode_settings, generate_signal_fn=generate_signal_fn, model=model,
                 cost=cost, logger=logger, circuit_breaker_loss_pct=circuit_breaker_loss_pct,
                 max_risk_pct=max_risk_pct, max_absolute_position_pct=max_absolute_position_pct,
+                min_reward_risk_ratio=min_reward_risk_ratio,
             )
 
         equity_today = backtest.mark_to_market_equity(state, full_frames, day)

@@ -23,6 +23,15 @@ circuit_breaker_loss_pct: 3.0
 max_risk_pct: 1.0
 max_absolute_position_pct: 20.0
 
+# Minimum acceptable reward:risk (take-profit distance over stop-loss distance,
+# both measured from current_price) -- a structural requirement, applied
+# identically in live and simulation, not part of the confidence-threshold
+# split above. A trade below this is overridden to hold by risk_manager.py.
+# 1.5 is deliberately a bit under the ~1.67 break-even figure for the 37.5%
+# win rate the historical-screening backtest realised -- a hypothesis to
+# re-test, not a number tuned to that one past sample.
+min_reward_risk_ratio: 1.5
+
 # Confidence thresholds. These are read by separate code paths -- the live path
 # cannot reach the simulation value (see mode.py).
 min_confidence_live: 0.65

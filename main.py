@@ -287,10 +287,14 @@ def _run_cycle_body(config: Dict[str, Any], is_live: bool) -> int:
     circuit_breaker_loss_pct = float(config.get("circuit_breaker_loss_pct", 3.0))
     max_risk_pct = float(config.get("max_risk_pct", 1.0))
     max_absolute_position_pct = float(config.get("max_absolute_position_pct", 20.0))
+    min_reward_risk_ratio = float(
+        config.get("min_reward_risk_ratio", risk_manager.DEFAULT_MIN_REWARD_RISK_RATIO)
+    )
 
     print(f"=== TradingBot cycle | mode={settings.label} | provider={provider_name} ===")
     print(f"min_confidence={settings.min_confidence:.2f}  max_risk={max_risk_pct:.2f}%  "
-          f"cap={max_absolute_position_pct:.2f}%  breaker=-{circuit_breaker_loss_pct:.2f}%")
+          f"cap={max_absolute_position_pct:.2f}%  breaker=-{circuit_breaker_loss_pct:.2f}%  "
+          f"min_reward_risk={min_reward_risk_ratio:.2f}")
 
     # --- equity + sweep ---------------------------------------------------
     if is_live:
@@ -356,6 +360,7 @@ def _run_cycle_body(config: Dict[str, Any], is_live: bool) -> int:
                 circuit_breaker_loss_pct=circuit_breaker_loss_pct,
                 max_risk_pct=max_risk_pct,
                 max_absolute_position_pct=max_absolute_position_pct,
+                min_reward_risk_ratio=min_reward_risk_ratio,
                 breaker_tracker=breaker_tracker,
             )
         except Exception as exc:  # noqa: BLE001 - one symbol never kills the cycle
@@ -394,6 +399,7 @@ def _process_symbol(
     circuit_breaker_loss_pct: float,
     max_risk_pct: float,
     max_absolute_position_pct: float,
+    min_reward_risk_ratio: float,
     breaker_tracker: CircuitBreakerTracker,
 ) -> None:
     is_live = settings.is_live
@@ -464,6 +470,7 @@ def _process_symbol(
         max_risk_pct=max_risk_pct,
         max_absolute_position_pct=max_absolute_position_pct,
         min_confidence=settings.min_confidence,
+        min_reward_risk_ratio=min_reward_risk_ratio,
     )
 
     exec_result = None

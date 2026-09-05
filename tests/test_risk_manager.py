@@ -123,6 +123,56 @@ def test_missing_both_levels_names_both():
     assert "take_profit_price" in result.override_reason
 
 
+# ---------------------------------------------------------- reward:risk floor
+
+
+def test_reward_risk_below_the_minimum_overrides_to_hold():
+    # price=100, stop=95 (risk 5), take=105 (reward 5) -> ratio 1.0, below the
+    # 1.5 default minimum.
+    result = validate(buy(stop_loss_price=95.0, take_profit_price=105.0))
+    assert result.action == "hold"
+    assert result.position_size_pct == 0.0
+    assert "reward:risk 1.00" in result.override_reason
+    assert "1.50 minimum" in result.override_reason
+
+
+def test_reward_risk_at_exactly_the_minimum_is_allowed():
+    # risk 5, reward 7.5 -> ratio exactly 1.5.
+    result = validate(buy(stop_loss_price=95.0, take_profit_price=107.5))
+    assert result.action == "buy"
+
+
+def test_reward_risk_above_the_minimum_is_unaffected():
+    result = validate(buy())  # default: risk 5, reward 15 -> ratio 3.0
+    assert result.action == "buy"
+    assert result.override_reason is None or "reward:risk" not in result.override_reason
+
+
+def test_reward_risk_minimum_is_configurable():
+    # Same 1.0 ratio as the first test, but with a lower minimum that permits it.
+    result = validate(buy(stop_loss_price=95.0, take_profit_price=105.0), min_reward_risk_ratio=1.0)
+    assert result.action == "buy"
+
+
+def test_reward_risk_floor_never_applies_to_a_sell():
+    # A sell's stop/take are schema-required but never used to manage anything
+    # once the sell executes -- this floor must never trap the bot in a
+    # position the model has already decided to exit.
+    result = validate(buy(action="sell", stop_loss_price=95.0, take_profit_price=105.0))
+    assert result.action == "sell"
+
+
+def test_reward_risk_floor_never_fires_on_top_of_an_already_rejected_trade():
+    # Confidence already forced this to hold before rule 4 even runs -- the
+    # reward:risk check must never additionally fire (and must never be the
+    # reason reported) on a trade another rule already killed.
+    result = validate(
+        buy(confidence=0.1, stop_loss_price=95.0, take_profit_price=105.0), min_confidence=0.65
+    )
+    assert result.action == "hold"
+    assert "reward:risk" not in result.override_reason
+
+
 def test_sell_is_sized_and_validated_the_same_way():
     result = validate(buy(action="sell"))
     assert result.action == "sell"

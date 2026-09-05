@@ -123,8 +123,11 @@ def test_only_the_open_of_day_n_is_ever_read_for_a_fill():
         return (
             SignalOutput(
                 symbol=signal_input.symbol, action="buy", confidence=0.9, position_size_pct=10.0,
-                stop_loss_price=signal_input.current_price * 0.9,
-                take_profit_price=signal_input.current_price * 1.1, reasoning="test",
+                # 5% risk, 20% reward (ratio 4.0) -- clears the reward:risk floor;
+                # this test is about which bar's Open gets read for the fill, not
+                # about reward:risk at all.
+                stop_loss_price=signal_input.current_price * 0.95,
+                take_profit_price=signal_input.current_price * 1.20, reasoning="test",
             ),
             TokenUsage(input_tokens=10, output_tokens=5),
         )
@@ -139,6 +142,50 @@ def test_only_the_open_of_day_n_is_ever_read_for_a_fill():
 
     assert "TEST" in state.open_positions
     assert state.open_positions["TEST"].entry_price == pytest.approx(150.0)  # Open, not 999
+
+
+def test_run_symbol_for_day_forwards_min_reward_risk_ratio_to_risk_manager():
+    """Both backtest.py's own run_backtest and backtest_historical_screening.py
+    call run_symbol_for_day, never risk_manager.validate directly -- so this is
+    the one place that has to prove the parameter actually reaches the risk
+    layer, not just that it's declared.
+    """
+    frame = daily_frame(n=80, close=100.0)
+    day = frame.index[70]
+
+    def fake_generate(signal_input, system_prompt=None, model=None):
+        from models import SignalOutput
+
+        # risk 5, reward 5 -> ratio 1.0: rejected under the 1.5 default,
+        # accepted once min_reward_risk_ratio=1.0 is threaded through.
+        return (
+            SignalOutput(
+                symbol=signal_input.symbol, action="buy", confidence=0.9, position_size_pct=10.0,
+                stop_loss_price=signal_input.current_price * 0.95,
+                take_profit_price=signal_input.current_price * 1.05, reasoning="test",
+            ),
+            TokenUsage(input_tokens=10, output_tokens=5),
+        )
+
+    rejected = backtest.BacktestState(equity=10_000.0)
+    backtest.run_symbol_for_day(
+        state=rejected, symbol="TEST", asset_class="equity", day=day, full_frame=frame,
+        mode_settings=_fake_mode_settings(), generate_signal_fn=fake_generate, model="claude-haiku-4-5",
+        cost=backtest.CostTracker("claude-haiku-4-5"), logger=backtest.BacktestLogger(":memory:"),
+        circuit_breaker_loss_pct=3.0, max_risk_pct=1.0, max_absolute_position_pct=20.0,
+        min_reward_risk_ratio=1.5,
+    )
+    assert "TEST" not in rejected.open_positions
+
+    accepted = backtest.BacktestState(equity=10_000.0)
+    backtest.run_symbol_for_day(
+        state=accepted, symbol="TEST", asset_class="equity", day=day, full_frame=frame,
+        mode_settings=_fake_mode_settings(), generate_signal_fn=fake_generate, model="claude-haiku-4-5",
+        cost=backtest.CostTracker("claude-haiku-4-5"), logger=backtest.BacktestLogger(":memory:"),
+        circuit_breaker_loss_pct=3.0, max_risk_pct=1.0, max_absolute_position_pct=20.0,
+        min_reward_risk_ratio=1.0,
+    )
+    assert "TEST" in accepted.open_positions
 
 
 def _fake_mode_settings():
@@ -500,6 +547,50 @@ def test_cost_is_shown_during_the_run_not_only_after(monkeypatch, tmp_path):
     assert estimate_pos < report_pos
     assert progress_pos < report_pos  # shown DURING, not only after
     assert report_pos < final_cost_pos
+
+
+def test_run_backtest_reads_min_reward_risk_ratio_from_config(monkeypatch, tmp_path):
+    """Acceptance criterion: run_backtest must actually pick up
+    config["min_reward_risk_ratio"], not just default to 1.5 regardless of
+    what config.yaml says.
+    """
+    frame = daily_frame(n=80, close=100.0)
+    monkeypatch.setattr(backtest, "fetch_historical_ohlcv", lambda symbol, start, end: frame)
+
+    def fake_provider(provider):
+        def fake_generate(signal_input, system_prompt=None, model=None):
+            from models import SignalOutput
+
+            # risk 5, reward 5 -> ratio 1.0: rejected under the 1.5 default,
+            # must be accepted once config sets min_reward_risk_ratio=1.0.
+            return (
+                SignalOutput(
+                    symbol=signal_input.symbol, action="buy", confidence=0.9, position_size_pct=10.0,
+                    stop_loss_price=signal_input.current_price * 0.95,
+                    take_profit_price=signal_input.current_price * 1.05, reasoning="r",
+                ),
+                TokenUsage(input_tokens=10, output_tokens=5),
+            )
+
+        return fake_generate
+
+    monkeypatch.setattr(backtest, "resolve_provider", fake_provider)
+
+    config = {
+        "circuit_breaker_loss_pct": 3.0, "max_risk_pct": 1.0, "max_absolute_position_pct": 20.0,
+        "min_confidence_live": 0.0, "min_reward_risk_ratio": 1.0,
+    }
+    report = backtest.run_backtest(
+        symbols_with_class=[("TEST", "equity")],
+        start=frame.index[70].date(), end=frame.index[72].date(),
+        config=config, provider="claude", model="claude-haiku-4-5",
+        starting_equity=10_000.0, db_path=str(tmp_path / "bt.db"),
+    )
+    assert report["num_trades"] == 0  # no sell yet -- just confirms the buy was allowed to open
+    conn = sqlite3.connect(str(tmp_path / "bt.db"))
+    rows = conn.execute("SELECT action, override_reason FROM trades").fetchall()
+    conn.close()
+    assert ("buy", None) in rows  # not overridden to hold
 
 
 # ==================================================================== report

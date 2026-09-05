@@ -543,6 +543,7 @@ def run_symbol_for_day(
     circuit_breaker_loss_pct: float,
     max_risk_pct: float,
     max_absolute_position_pct: float,
+    min_reward_risk_ratio: float = risk_manager.DEFAULT_MIN_REWARD_RISK_RATIO,
 ) -> None:
     """One symbol, one simulated day: decide, size, and (maybe) fill.
 
@@ -611,6 +612,7 @@ def run_symbol_for_day(
             max_risk_pct=max_risk_pct,
             max_absolute_position_pct=max_absolute_position_pct,
             min_confidence=mode_settings.min_confidence,
+            min_reward_risk_ratio=min_reward_risk_ratio,
         )
 
     if day not in full_frame.index:
@@ -762,6 +764,9 @@ def run_backtest(
     circuit_breaker_loss_pct = float(config.get("circuit_breaker_loss_pct", 3.0))
     max_risk_pct = float(config.get("max_risk_pct", 1.0))
     max_absolute_position_pct = float(config.get("max_absolute_position_pct", 20.0))
+    min_reward_risk_ratio = float(
+        config.get("min_reward_risk_ratio", risk_manager.DEFAULT_MIN_REWARD_RISK_RATIO)
+    )
 
     print(f"=== Backtest | {start} .. {end} | provider={provider} model={model} ===")
     for item in LIMITATIONS:
@@ -797,6 +802,7 @@ def run_backtest(
                 mode_settings=mode_settings, generate_signal_fn=generate_signal_fn, model=model,
                 cost=cost, logger=logger, circuit_breaker_loss_pct=circuit_breaker_loss_pct,
                 max_risk_pct=max_risk_pct, max_absolute_position_pct=max_absolute_position_pct,
+                min_reward_risk_ratio=min_reward_risk_ratio,
             )
 
         equity_today = mark_to_market_equity(state, full_frames, day)

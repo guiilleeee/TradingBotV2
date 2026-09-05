@@ -180,6 +180,59 @@ def _fake_mode_settings():
     return mode.ModeSettings(is_live=True, system_prompt="SYSTEM", min_confidence=0.5)
 
 
+def test_run_backtest_with_rotating_screening_reads_min_reward_risk_ratio_from_config(
+    monkeypatch, tmp_path
+):
+    """Acceptance criterion: this module must also pick up
+    config["min_reward_risk_ratio"] -- it calls backtest.run_symbol_for_day
+    directly, never risk_manager.validate itself, so this is the one place
+    proving the value actually gets threaded through here too.
+    """
+    import sqlite3
+
+    start, end = date(2024, 3, 4), date(2024, 3, 6)
+
+    schedule = bhs.EquitySlateSchedule({date(2024, 3, 4): ["AAA"]})
+    monkeypatch.setattr(bhs, "build_equity_slate_schedule", lambda *a, **kw: schedule)
+    monkeypatch.setattr(equity_universe, "build_equity_universe", lambda: {"AAA"})
+
+    aaa = daily_frame(start="2023-12-01", n=100, close=100.0)
+    spy = daily_frame(start="2023-12-01", n=100, close=400.0)
+
+    def fetch(symbol, start, end, lookback_days=180):
+        return {"AAA": aaa, "SPY": spy}[symbol]
+
+    monkeypatch.setattr(backtest, "fetch_historical_ohlcv", fetch)
+
+    def fake_generate(signal_input, system_prompt=None, model=None):
+        # risk 5, reward 5 -> ratio 1.0: rejected under the 1.5 default,
+        # must be accepted once config sets min_reward_risk_ratio=1.0.
+        return (
+            SignalOutput(
+                symbol=signal_input.symbol, action="buy", confidence=0.9, position_size_pct=10.0,
+                stop_loss_price=signal_input.current_price * 0.95,
+                take_profit_price=signal_input.current_price * 1.05, reasoning="r",
+            ),
+            TokenUsage(input_tokens=1, output_tokens=1),
+        )
+
+    monkeypatch.setattr(backtest, "resolve_provider", lambda provider: fake_generate)
+    monkeypatch.setattr(
+        bhs.mode, "resolve_mode_settings", lambda is_live, config: _fake_mode_settings()
+    )
+
+    db_path = str(tmp_path / "bhs.db")
+    bhs.run_backtest_with_rotating_screening(
+        start=start, end=end, config={"min_reward_risk_ratio": 1.0}, crypto_symbols=[],
+        equity_count=5, db_path=db_path,
+    )
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute("SELECT action, override_reason FROM trades").fetchall()
+    conn.close()
+    assert ("buy", None) in rows  # not overridden to hold, despite a 1.0 ratio
+
+
 def test_a_position_survives_rotation_and_is_still_swept_after_its_symbol_leaves_the_slate(
     monkeypatch,
 ):
