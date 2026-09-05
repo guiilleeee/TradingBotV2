@@ -2,7 +2,7 @@
 
 # Only the literal boolean `true` enables real-money trading. Anything else --
 # "true", 1, yes, a typo -- resolves to simulation. Failing safe is the point.
-live_execution: false
+live_execution: true
 
 # claude | gemini
 signal_provider: claude
