@@ -1,12 +1,12 @@
 name: Weekly symbol screening
 
 on:
-  schedule:
-    # Monday 06:00 UTC. Independent of trading_bot.yml's cron entirely -- no
-    # workflow_run chaining, no shared job, no shared secrets beyond what each
-    # actually needs. A failure here cannot block or break the 4h cycle because
-    # there is nothing in either file that makes one depend on the other.
-    - cron: '0 6 * * 1'
+  # Cron trigger disabled: equities (this job's whole point -- it also
+  # rescreens crypto, but the equity side is why it runs weekly at all) are
+  # deferred entirely until Alpaca is set up. workflow_dispatch stays enabled
+  # so this can still be run manually.
+  # schedule:
+  #   - cron: '0 6 * * 1'  # Monday 06:00 UTC
   workflow_dispatch:
 
 permissions:
