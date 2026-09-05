@@ -45,6 +45,8 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+from secrets_redaction import sanitize
+
 FMP_BASE_URL = "https://financialmodelingprep.com"
 HTTP_TIMEOUT = 30.0
 # Free tier is 250 requests/day (confirmed against FMP's published pricing page).
@@ -93,16 +95,29 @@ def _api_key() -> str:
 
 
 def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-    """One FMP GET call. Raises on any failure -- callers decide how to degrade."""
+    """One FMP GET call. Raises on any failure -- callers decide how to degrade.
+
+    Whatever this raises is guaranteed not to carry the literal API key in its
+    message, however far it propagates. Unlike every other credential this
+    project holds (sent via header or signature), FMP's key travels as a query-
+    string parameter -- so a raw HTTPError's default string form embeds it
+    directly, in the URL, in plain text. Caught and re-raised as a sanitized
+    FMPError here, once, rather than depending on every future caller (or a
+    debug print added to one later) to remember to scrub it at whatever print
+    or log site the exception eventually reaches.
+    """
     query = dict(params or {})
     query["apikey"] = _api_key()
-    resp = requests.get(f"{FMP_BASE_URL}{path}", params=query, timeout=HTTP_TIMEOUT)
-    resp.raise_for_status()
-    data = resp.json()
-    # FMP returns a 200 with an {"Error Message": ...} body for some failure
-    # modes (bad params, plan-gated endpoints) rather than a 4xx status.
-    if isinstance(data, dict) and "Error Message" in data:
-        raise FMPError(f"FMP {path}: {data['Error Message']}")
+    try:
+        resp = requests.get(f"{FMP_BASE_URL}{path}", params=query, timeout=HTTP_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        # FMP returns a 200 with an {"Error Message": ...} body for some failure
+        # modes (bad params, plan-gated endpoints) rather than a 4xx status.
+        if isinstance(data, dict) and "Error Message" in data:
+            raise FMPError(f"FMP {path}: {data['Error Message']}")
+    except Exception as exc:
+        raise FMPError(sanitize(f"{type(exc).__name__}: {exc}")) from None
     time.sleep(INTER_CALL_DELAY_SECONDS)
     return data
 

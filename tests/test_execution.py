@@ -203,8 +203,12 @@ class FakeResponse:
 
 @pytest.fixture
 def capture_alpaca(monkeypatch):
-    monkeypatch.setenv("ALPACA_API_KEY", "k")
-    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    # Realistic-length placeholders, not single characters -- a 1-char "secret"
+    # (e.g. "s") gets found and redacted everywhere that letter legitimately
+    # appears in ordinary text (sanitize() does an exact literal-value scrub),
+    # which is a test-fixture footgun, not a sanitize() bug.
+    monkeypatch.setenv("ALPACA_API_KEY", "test-alpaca-key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "test-alpaca-secret")
     sent = {}
 
     def fake_post(url, headers=None, json=None, timeout=None):
@@ -260,8 +264,12 @@ def test_live_notional_buy_sends_notional_and_day_tif(capture_alpaca):
 
 
 def test_alpaca_rejection_becomes_an_error_result(monkeypatch):
-    monkeypatch.setenv("ALPACA_API_KEY", "k")
-    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    # Realistic-length placeholders, not single characters -- a 1-char "secret"
+    # (e.g. "s") gets found and redacted everywhere that letter legitimately
+    # appears in ordinary text (sanitize() does an exact literal-value scrub),
+    # which is a test-fixture footgun, not a sanitize() bug.
+    monkeypatch.setenv("ALPACA_API_KEY", "test-alpaca-key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "test-alpaca-secret")
 
     class Rejected:
         status_code = 422
@@ -277,8 +285,12 @@ def test_alpaca_rejection_becomes_an_error_result(monkeypatch):
 
 
 def test_an_exploding_venue_returns_an_error_not_a_crash(monkeypatch):
-    monkeypatch.setenv("ALPACA_API_KEY", "k")
-    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    # Realistic-length placeholders, not single characters -- a 1-char "secret"
+    # (e.g. "s") gets found and redacted everywhere that letter legitimately
+    # appears in ordinary text (sanitize() does an exact literal-value scrub),
+    # which is a test-fixture footgun, not a sanitize() bug.
+    monkeypatch.setenv("ALPACA_API_KEY", "test-alpaca-key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "test-alpaca-secret")
 
     def boom(*a, **kw):
         raise RuntimeError("connection reset")
@@ -287,6 +299,33 @@ def test_an_exploding_venue_returns_an_error_not_a_crash(monkeypatch):
     result = execution.execute_trade(signal("buy", size=10.0), "equity", 100.0, 10000.0, is_live=True)
     assert result.status == "error"
     assert "connection reset" in result.message
+
+
+def test_execute_trade_redacts_a_secret_embedded_in_an_exploding_venues_message(monkeypatch):
+    """execution.execute_trade's ExecutionResult.message is persisted verbatim
+    into trading_bot.db (a file this project commits to a now-public repo), so
+    any secret an unexpected exception happens to embed must never survive
+    into it -- regardless of which internal function raised, and regardless of
+    whether that call site remembered to sanitize anything itself.
+    """
+    fake_secret = "sk-ant-realistic-looking-fake-secret-value-123456"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", fake_secret)
+    monkeypatch.setenv("ALPACA_API_KEY", "test-alpaca-key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "test-alpaca-secret")
+
+    def boom(*a, **kw):
+        # A contrived but representative shape: some unrelated downstream
+        # exception whose text happens to embed a credential from the
+        # environment (e.g. an SDK echoing a header back in a debug message).
+        raise RuntimeError(f"upstream call failed, sent header x-api-key: {fake_secret}")
+
+    monkeypatch.setattr(execution.requests, "post", boom)
+    result = execution.execute_trade(signal("buy", size=10.0), "equity", 100.0, 10000.0, is_live=True)
+
+    assert result.status == "error"
+    assert fake_secret not in result.message
+    assert "***REDACTED***" in result.message
+    assert "upstream call failed" in result.message  # the non-secret context survives
 
 
 # ------------------------------------------------------------------- crypto
@@ -382,8 +421,8 @@ def test_every_spot_condition_is_checked_independently(mutation, expected):
 
 def test_no_order_is_ever_placed_on_a_perpetual_market(monkeypatch):
     """The acceptance criterion, tested by observation rather than by omission."""
-    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xabc")
-    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0xdef")
+    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xabc0000000000000000000000000000000000001")
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0xdef0000000000000000000000000000000000000000000000000000000002")
     exchange = FakeHyperliquid(market=perp_market())
     monkeypatch.setattr(execution, "_hyperliquid_exchange", lambda is_live: exchange)
 
@@ -412,8 +451,8 @@ def test_the_spot_guard_also_applies_in_simulation(monkeypatch):
 
 
 def test_a_live_spot_order_carries_no_leverage_or_margin_params(monkeypatch):
-    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xabc")
-    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0xdef")
+    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xabc0000000000000000000000000000000000001")
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0xdef0000000000000000000000000000000000000000000000000000000002")
     exchange = FakeHyperliquid()
     monkeypatch.setattr(execution, "_hyperliquid_exchange", lambda is_live: exchange)
 
@@ -536,8 +575,12 @@ def test_simulation_reads_the_ledger_and_never_a_broker(monkeypatch):
 
 
 def test_live_equity_position_comes_from_alpaca(monkeypatch):
-    monkeypatch.setenv("ALPACA_API_KEY", "k")
-    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    # Realistic-length placeholders, not single characters -- a 1-char "secret"
+    # (e.g. "s") gets found and redacted everywhere that letter legitimately
+    # appears in ordinary text (sanitize() does an exact literal-value scrub),
+    # which is a test-fixture footgun, not a sanitize() bug.
+    monkeypatch.setenv("ALPACA_API_KEY", "test-alpaca-key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "test-alpaca-secret")
     monkeypatch.setattr(
         execution.requests,
         "get",
@@ -587,15 +630,15 @@ def test_balance_lookup_explicitly_asks_for_the_spot_wallet(monkeypatch):
     # ccxt's fetch_balance for Hyperliquid defaults to the PERPETUALS account
     # ("defaults to swap" per its own docstring). Omitting type=spot would read
     # the wrong account entirely and report positions we do not hold on spot.
-    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xabc")
-    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0xdef")
+    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xabc0000000000000000000000000000000000001")
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0xdef0000000000000000000000000000000000000000000000000000000002")
     exchange = FakeHyperliquid(balances={"total": {"BTC": 0.05}})
     monkeypatch.setattr(execution, "_hyperliquid_exchange", lambda is_live: exchange)
 
     execution.fetch_existing_position("BTC-USD", "crypto", True, FakeLogger(last_buy=41000.0))
 
     assert exchange.balance_params[0]["type"] == "spot"
-    assert exchange.balance_params[0]["user"] == "0xabc"
+    assert exchange.balance_params[0]["user"] == "0xabc0000000000000000000000000000000000001"
 
 
 def test_live_crypto_without_a_known_cost_basis_refuses_to_guess(monkeypatch):
@@ -618,8 +661,12 @@ def test_live_crypto_with_no_balance_is_flat(monkeypatch):
 
 
 def test_live_equity_falls_back_when_no_venue_answers(monkeypatch):
-    monkeypatch.setenv("ALPACA_API_KEY", "k")
-    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    # Realistic-length placeholders, not single characters -- a 1-char "secret"
+    # (e.g. "s") gets found and redacted everywhere that letter legitimately
+    # appears in ordinary text (sanitize() does an exact literal-value scrub),
+    # which is a test-fixture footgun, not a sanitize() bug.
+    monkeypatch.setenv("ALPACA_API_KEY", "test-alpaca-key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "test-alpaca-secret")
 
     def boom(*a, **kw):
         raise RuntimeError("down")
@@ -631,8 +678,12 @@ def test_live_equity_falls_back_when_no_venue_answers(monkeypatch):
 def test_live_close_books_pnl_from_the_actual_fill(monkeypatch):
     # The circuit breaker acts on this number, so it must reflect what filled,
     # not the pre-trade price the decision was made at.
-    monkeypatch.setenv("ALPACA_API_KEY", "k")
-    monkeypatch.setenv("ALPACA_API_SECRET", "s")
+    # Realistic-length placeholders, not single characters -- a 1-char "secret"
+    # (e.g. "s") gets found and redacted everywhere that letter legitimately
+    # appears in ordinary text (sanitize() does an exact literal-value scrub),
+    # which is a test-fixture footgun, not a sanitize() bug.
+    monkeypatch.setenv("ALPACA_API_KEY", "test-alpaca-key")
+    monkeypatch.setenv("ALPACA_API_SECRET", "test-alpaca-secret")
     monkeypatch.setattr(
         execution.requests,
         "post",
@@ -650,8 +701,8 @@ def test_live_close_books_pnl_from_the_actual_fill(monkeypatch):
 
 
 def test_live_crypto_close_books_pnl_from_the_actual_fill(monkeypatch):
-    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xabc")
-    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0xdef")
+    monkeypatch.setenv("HYPERLIQUID_WALLET_ADDRESS", "0xabc0000000000000000000000000000000000001")
+    monkeypatch.setenv("HYPERLIQUID_PRIVATE_KEY", "0xdef0000000000000000000000000000000000000000000000000000000002")
 
     monkeypatch.setattr(
         execution, "_hyperliquid_exchange",

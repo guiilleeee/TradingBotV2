@@ -33,7 +33,6 @@ result, and never partially or emptily overwrites it.
 from __future__ import annotations
 
 import argparse
-import sys
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -42,6 +41,7 @@ import equity_universe
 import execution
 import market_intel
 import telegram_alerts
+from secrets_redaction import sanitize
 
 DEFAULT_OUTPUT_PATH = "symbols.yaml"
 DEFAULT_CONFIG_PATH_FOR_ALERTS = "config.yaml"
@@ -306,10 +306,15 @@ def run_screening(
         print(f"  selected: {crypto_symbols}")
 
     except Exception as exc:  # noqa: BLE001 - any failure here must not touch the file
-        print(f"FAILED: screening raised {type(exc).__name__}: {exc}")
-        traceback.print_exc(file=sys.stdout)
+        # Sanitized even though equity_universe._get already guarantees an FMP
+        # failure can't carry the raw key -- this is the outer catch-all for
+        # *any* exception in the whole screening flow, present and future, and
+        # this print goes straight to GitHub Actions logs unredacted otherwise.
+        summary = sanitize(f"{type(exc).__name__}: {exc}")
+        print(f"FAILED: screening raised {summary}")
+        print(sanitize(traceback.format_exc()))
         print(f"Leaving {output_path} untouched -- the 4h cycle keeps last week's list.")
-        telegram_alerts.send_screening_failure_alert(is_live, f"{type(exc).__name__}: {exc}")
+        telegram_alerts.send_screening_failure_alert(is_live, summary)
         return 1
 
     _write_symbols_file(output_path, equity_symbols, crypto_symbols, equity_scored, crypto_scored)

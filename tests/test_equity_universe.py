@@ -15,6 +15,7 @@ before writing these fakes -- see equity_universe.py's docstring.
 
 import pandas as pd
 import pytest
+import requests
 
 import equity_universe
 
@@ -74,6 +75,51 @@ def test_missing_api_key_raises_a_named_error(monkeypatch):
     monkeypatch.delenv("FMP_API_KEY", raising=False)
     with pytest.raises(equity_universe.FMPError, match="FMP_API_KEY"):
         equity_universe._get("/stable/sp-500")
+
+
+def test_fmp_exception_never_carries_the_literal_api_key_however_it_fails(monkeypatch):
+    """FMP's key travels as a query-string parameter, unlike every other
+    credential this project holds -- a real requests.HTTPError's default
+    string form embeds the full request URL, key included. Whatever _get
+    raises must never carry it, wherever that exception is eventually printed
+    or logged (now, or after some future change to a caller).
+    """
+    fake_key = "fmp-real-secret-key-abc123"
+    monkeypatch.setenv("FMP_API_KEY", fake_key)
+
+    class ExplodingResponse:
+        def raise_for_status(self):
+            raise requests.exceptions.HTTPError(
+                "500 Server Error: Internal Server Error for url: "
+                f"https://financialmodelingprep.com/stable/sp-500?apikey={fake_key}"
+            )
+
+    monkeypatch.setattr(equity_universe.requests, "get", lambda *a, **kw: ExplodingResponse())
+
+    with pytest.raises(equity_universe.FMPError) as excinfo:
+        equity_universe._get("/stable/sp-500")
+
+    message = str(excinfo.value)
+    assert fake_key not in message
+    assert "REDACTED" in message
+
+
+def test_fmp_error_message_body_also_never_carries_the_key(monkeypatch):
+    """The other _get failure mode -- FMP's own {"Error Message": ...} body on
+    an HTTP 200 -- must be scrubbed the same way, not just HTTP-level errors.
+    """
+    fake_key = "fmp-real-secret-key-abc123"
+    monkeypatch.setenv("FMP_API_KEY", fake_key)
+    mock_get(monkeypatch, {
+        "/stable/sp-500": {"Error Message": f"Invalid apikey={fake_key} supplied"},
+    })
+
+    with pytest.raises(equity_universe.FMPError) as excinfo:
+        equity_universe._get("/stable/sp-500")
+
+    message = str(excinfo.value)
+    assert fake_key not in message
+    assert "REDACTED" in message
 
 
 # ---------------------------------------------------------------- S&P 500

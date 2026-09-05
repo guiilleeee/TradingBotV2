@@ -21,6 +21,7 @@ from typing import Any, Dict, Optional, Tuple
 import requests
 
 from models import AssetClass, ExecutionResult, ExistingPosition, TradeSignal
+from secrets_redaction import sanitize
 
 # Live endpoint by default. This whole path is already gated behind an explicit
 # `live_execution: true`, so silently routing a "live" run to paper would be its
@@ -635,6 +636,34 @@ def _execute_crypto(
 
 
 def execute_trade(
+    signal: TradeSignal,
+    asset_class: AssetClass,
+    current_price: float,
+    live_equity: float,
+    is_live: bool,
+    existing_position: Optional[ExistingPosition] = None,
+) -> ExecutionResult:
+    """Route one signal to its venue, with `.message` guaranteed secret-free.
+
+    The actual routing lives in `_execute_trade`; this is the one choke point
+    every path through it returns through, so `.message` -- persisted verbatim
+    into trading_bot.db (a file this project commits to a now-public repo) --
+    is sanitized here exactly once, regardless of which internal function or
+    except clause built it, and regardless of any new message-building call
+    site added inside `_execute_trade` in the future. Scrubbing at every
+    individual call site instead would silently stop covering the next one
+    someone adds -- the same fragility a full-system audit flagged in the
+    first place.
+    """
+    result = _execute_trade(
+        signal, asset_class, current_price, live_equity, is_live, existing_position
+    )
+    if result.message:
+        result = result.model_copy(update={"message": sanitize(result.message)})
+    return result
+
+
+def _execute_trade(
     signal: TradeSignal,
     asset_class: AssetClass,
     current_price: float,

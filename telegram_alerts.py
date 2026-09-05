@@ -19,10 +19,12 @@ live/simulation split itself.
 from __future__ import annotations
 
 import os
-import re
 from typing import Iterable
 
 import requests
+
+from secrets_redaction import SECRET_ENV_VARS as _SECRET_ENV_VARS
+from secrets_redaction import sanitize as _sanitize
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
 HTTP_TIMEOUT = 15.0
@@ -38,53 +40,10 @@ LIVE_LABEL = "\U0001f534 REAL"  # red circle
 # of text, on a phone lock screen.
 MAX_MESSAGE_LENGTH = 800
 
-# Every secret this project holds, redacted by literal value wherever it
-# appears in outgoing text or in a locally-logged failure. This is deliberately
-# an exact-value match against the live environment rather than a guessed
-# pattern -- it is precise (no false positives on ordinary numbers) and covers
-# exactly the secrets this project actually has.
-_SECRET_ENV_VARS = (
-    "TELEGRAM_BOT_TOKEN",
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_WORKSPACE_ID",
-    "GEMINI_API_KEY",
-    "ALPACA_API_KEY",
-    "ALPACA_API_SECRET",
-    "HYPERLIQUID_WALLET_ADDRESS",
-    "HYPERLIQUID_PRIVATE_KEY",
-    "FMP_API_KEY",
-)
-
-# Backstop patterns for the two shapes a secret is most likely to leak in even
-# when the literal-value scrub above doesn't catch it: a Telegram bot token
-# embedded in a request URL inside a connection-error message (the actual,
-# concrete risk that motivated this function -- urllib3's own exception text
-# routinely includes the full request URL, token and all), and an Ethereum-
-# style 0x hex string (Hyperliquid wallet addresses are 40 hex chars, private
-# keys are 64 -- a single length-agnostic pattern catches both).
-_BOT_TOKEN_IN_URL_RE = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
-_HEX_SECRET_RE = re.compile(r"0x[0-9a-fA-F]{40,}")
-
-_REDACTED = "***REDACTED***"
-
-
-def _sanitize(text: str) -> str:
-    """Strip anything that looks like a secret before it reaches Telegram or a log.
-
-    Applied to every outgoing message and to every locally-logged failure --
-    a misconfigured request could echo a credential back in its error text
-    (the bot token embedded in the request URL is the concrete case), so this
-    runs unconditionally rather than only when something looks suspicious.
-    """
-    if not text:
-        return text
-    for var in _SECRET_ENV_VARS:
-        value = os.environ.get(var)
-        if value:
-            text = text.replace(value, _REDACTED)
-    text = _BOT_TOKEN_IN_URL_RE.sub(f"/bot{_REDACTED}", text)
-    text = _HEX_SECRET_RE.sub(f"0x{_REDACTED}", text)
-    return text
+# _sanitize / _SECRET_ENV_VARS re-exported (not redefined) from
+# secrets_redaction.py -- that module is now the single source of truth, used
+# by execution.py and equity_universe.py too. Kept under these names here so
+# every existing caller and test in this file is unaffected by the move.
 
 
 def _truncate(text: str, limit: int = MAX_MESSAGE_LENGTH) -> str:
