@@ -56,14 +56,21 @@ class FakeMessage:
 
 
 class FakeAnthropic:
-    def __init__(self, text=json.dumps(PAYLOAD), stop_reason="end_turn"):
+    def __init__(self, text=json.dumps(PAYLOAD), stop_reason="end_turn", raise_first=None):
         self._text = text
         self._stop_reason = stop_reason
+        # raise_first: an exception (or list of exceptions, one per early call)
+        # to raise before eventually returning a real response.
+        self._raise_first = raise_first
         self.calls = []
         self.messages = self
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
+        if self._raise_first:
+            queue = self._raise_first if isinstance(self._raise_first, list) else [self._raise_first]
+            if len(self.calls) <= len(queue):
+                raise queue[len(self.calls) - 1]
         return FakeMessage(self._text, self._stop_reason)
 
 
@@ -109,6 +116,78 @@ def test_claude_parses_a_fenced_response():
     assert signal_generator.generate_signal(make_input(), client=client).action == "buy"
 
 
+# --------------------------------------------------------- retry on overload
+
+
+def _overloaded_error(message="Overloaded"):
+    """A real anthropic.OverloadedError -- constructed the same way the SDK
+    itself would build one from a 529 response, not a stand-in exception, so
+    a test here proves the actual exception type is what gets caught.
+    """
+    import anthropic
+    import httpx2
+
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx2.Response(
+        529, request=request, json={"error": {"type": "overloaded_error", "message": message}}
+    )
+    return anthropic.OverloadedError(
+        message, response=response, body={"error": {"type": "overloaded_error", "message": message}}
+    )
+
+
+def _bad_request_error(message="model: field required"):
+    import anthropic
+    import httpx2
+
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx2.Response(
+        400, request=request, json={"error": {"type": "invalid_request_error", "message": message}}
+    )
+    return anthropic.BadRequestError(
+        message, response=response,
+        body={"error": {"type": "invalid_request_error", "message": message}},
+    )
+
+
+def test_claude_retries_a_transient_overload_and_uses_the_eventual_success(monkeypatch, capsys):
+    monkeypatch.setattr(signal_generator.time, "sleep", lambda seconds: None)
+    client = FakeAnthropic(raise_first=_overloaded_error())
+
+    out = signal_generator.generate_signal(make_input(), client=client)
+
+    assert out.action == "buy"  # the eventual (second-attempt) success is what's used
+    assert len(client.calls) == 2
+    assert "attempt 1/3" in capsys.readouterr().out
+
+
+def test_claude_gives_up_after_max_attempts_of_persistent_overload(monkeypatch):
+    monkeypatch.setattr(signal_generator.time, "sleep", lambda seconds: None)
+    client = FakeAnthropic(raise_first=[_overloaded_error(), _overloaded_error(), _overloaded_error()])
+
+    import anthropic
+
+    with pytest.raises(anthropic.OverloadedError):
+        signal_generator.generate_signal(make_input(), client=client)
+    assert len(client.calls) == signal_generator.MAX_ATTEMPTS == 3
+
+
+def test_claude_does_not_retry_a_real_rejection(monkeypatch):
+    """A non-transient error (e.g. a real 400) fails immediately, same as
+    today -- no retry, no backoff sleep at all.
+    """
+    sleep_calls = []
+    monkeypatch.setattr(signal_generator.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    client = FakeAnthropic(raise_first=_bad_request_error())
+
+    import anthropic
+
+    with pytest.raises(anthropic.BadRequestError):
+        signal_generator.generate_signal(make_input(), client=client)
+    assert len(client.calls) == 1  # no retry at all
+    assert sleep_calls == []
+
+
 # ------------------------------------------------------------------- Gemini
 
 
@@ -118,9 +197,12 @@ class FakeGeminiResponse:
 
 
 class FakeGemini:
-    def __init__(self, text=json.dumps(PAYLOAD), fail_first=False):
+    def __init__(self, text=json.dumps(PAYLOAD), fail_first=False, raise_first=None):
         self._text = text
         self._fail_first = fail_first
+        # raise_first: an exception (or list of exceptions, one per early call)
+        # to raise before eventually returning a real response.
+        self._raise_first = raise_first
         self.calls = []
         self.models = self
 
@@ -128,6 +210,10 @@ class FakeGemini:
         self.calls.append(kwargs)
         if self._fail_first and len(self.calls) == 1:
             raise ValueError("Unsupported schema construct")
+        if self._raise_first:
+            queue = self._raise_first if isinstance(self._raise_first, list) else [self._raise_first]
+            if len(self.calls) <= len(queue):
+                raise queue[len(self.calls) - 1]
         return FakeGeminiResponse(self._text)
 
 
@@ -156,6 +242,78 @@ def test_gemini_falls_back_when_the_schema_dialect_is_rejected():
     assert client.calls[1]["config"].response_mime_type == "application/json"
     assert "schema" in client.calls[1]["contents"].lower()
     assert out.action == "buy"
+
+
+# --------------------------------------------------------- retry on overload
+
+
+def _gemini_server_error(code=503, message="overloaded"):
+    from google.genai import errors
+
+    return errors.ServerError(code, {"error": {"message": message}}, None)
+
+
+def _gemini_rate_limit_error(message="rate limit exceeded"):
+    from google.genai import errors
+
+    return errors.ClientError(429, {"error": {"message": message}}, None)
+
+
+def _gemini_bad_request_error(message="invalid argument"):
+    from google.genai import errors
+
+    return errors.ClientError(400, {"error": {"message": message}}, None)
+
+
+def test_gemini_retries_a_transient_server_error_and_uses_the_eventual_success(monkeypatch, capsys):
+    monkeypatch.setattr(signal_generator_gemini.time, "sleep", lambda seconds: None)
+    client = FakeGemini(raise_first=_gemini_server_error())
+
+    out = signal_generator_gemini.generate_signal(make_input(), client=client)
+
+    assert out.action == "buy"
+    assert len(client.calls) == 2
+    assert "attempt 1/3" in capsys.readouterr().out
+
+
+def test_gemini_retries_a_429_rate_limit_the_same_way(monkeypatch):
+    monkeypatch.setattr(signal_generator_gemini.time, "sleep", lambda seconds: None)
+    client = FakeGemini(raise_first=_gemini_rate_limit_error())
+
+    out = signal_generator_gemini.generate_signal(make_input(), client=client)
+    assert out.action == "buy"
+    assert len(client.calls) == 2
+
+
+def test_gemini_gives_up_after_max_attempts_of_persistent_overload_then_falls_back(monkeypatch):
+    """After 3 failed attempts on the schema-mode call, the existing fallback-
+    to-plain-JSON-mode path takes over (itself retried the same way) -- a
+    reasonable degrade, not a misfire, since the outer except is unchanged.
+    """
+    monkeypatch.setattr(signal_generator_gemini.time, "sleep", lambda seconds: None)
+    client = FakeGemini(
+        raise_first=[_gemini_server_error(), _gemini_server_error(), _gemini_server_error()]
+    )
+
+    out = signal_generator_gemini.generate_signal(make_input(), client=client)
+    assert out.action == "buy"
+    assert len(client.calls) == 4  # 3 exhausted attempts + 1 fallback success
+    assert client.calls[3]["config"].response_json_schema is None  # the fallback call
+
+
+def test_gemini_does_not_retry_a_real_client_error_within_the_retry_loop(monkeypatch):
+    """A real 400 is not transient -- _call_with_retries must not retry it,
+    though the existing outer except still triggers the schema-dialect
+    fallback (unrelated to retry, unchanged behaviour).
+    """
+    sleep_calls = []
+    monkeypatch.setattr(signal_generator_gemini.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    client = FakeGemini(raise_first=_gemini_bad_request_error())
+
+    out = signal_generator_gemini.generate_signal(make_input(), client=client)
+    assert out.action == "buy"  # the fallback call succeeds
+    assert len(client.calls) == 2  # one failed attempt (not retried) + one fallback
+    assert sleep_calls == []  # never slept -- the 400 was never treated as transient
 
 
 def test_gemini_uses_the_prompt_it_is_given():

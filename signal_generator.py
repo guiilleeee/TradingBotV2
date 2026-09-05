@@ -9,7 +9,8 @@ mutated.
 from __future__ import annotations
 
 import os
-from typing import Any, Optional, Tuple
+import time
+from typing import Any, Callable, Optional, Tuple, TypeVar
 
 from models import SignalInput, SignalOutput, TokenUsage, parse_signal_output
 from prompts import SIGNAL_JSON_SCHEMA, SYSTEM_PROMPT, build_user_prompt
@@ -21,6 +22,16 @@ MAX_TOKENS = 16000
 
 # Required on every request made with an identity-linked API key. See _client().
 WORKSPACE_HEADER = "anthropic-workspace-id"
+
+# Real example this exists for: a live cycle failed a symbol outright with
+# "OverloadedError: Error code: 529 - Overloaded" -- a transient, server-side
+# condition, not a real problem with the request. 3 attempts, short backoff:
+# enough to ride out a brief overload without turning a slow provider into a
+# cycle that hangs.
+MAX_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = (1, 3)  # wait after attempt 1 fails, then after attempt 2
+
+T = TypeVar("T")
 
 # No temperature is sent. `temperature` was removed from the current Claude model
 # family (Opus 4.7 onward) and now returns a 400. Determinism comes from the strict
@@ -60,6 +71,29 @@ def _client() -> Any:
     )
 
 
+def _call_with_retries(make_call: Callable[[], T], symbol: str) -> T:
+    """Retry `make_call` only on Anthropic's 529 (overloaded) -- a transient,
+    server-side condition that clears up on its own. Every other error --
+    a bad request, a refusal, an auth failure -- fails immediately and loudly,
+    exactly as before this existed; only OverloadedError is worth spending a
+    retry on. Logged plainly on every attempt so a cycle's output still shows
+    what happened, rather than silently succeeding on attempt 2 with no trace.
+    """
+    import anthropic  # lazy: see _client()'s own comment on why
+
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            return make_call()
+        except anthropic.OverloadedError as exc:
+            last_exc = exc
+            print(f"{symbol}: Claude overloaded (attempt {attempt}/{MAX_ATTEMPTS}): {exc}")
+            if attempt == MAX_ATTEMPTS:
+                raise
+            time.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
+    raise last_exc  # unreachable -- the loop above always returns or raises
+
+
 def generate_signal(
     signal_input: SignalInput,
     system_prompt: str = SYSTEM_PROMPT,
@@ -95,17 +129,20 @@ def generate_signal_with_usage(
     """
     client = client or _client()
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=MAX_TOKENS,
-        system=system_prompt,
-        messages=[
-            {
-                "role": "user",
-                "content": build_user_prompt(signal_input.model_dump_json(indent=2)),
-            }
-        ],
-        output_config={"format": {"type": "json_schema", "schema": SIGNAL_JSON_SCHEMA}},
+    response = _call_with_retries(
+        lambda: client.messages.create(
+            model=model,
+            max_tokens=MAX_TOKENS,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": build_user_prompt(signal_input.model_dump_json(indent=2)),
+                }
+            ],
+            output_config={"format": {"type": "json_schema", "schema": SIGNAL_JSON_SCHEMA}},
+        ),
+        signal_input.symbol,
     )
 
     # A refusal comes back as HTTP 200 with no usable content, so check before
