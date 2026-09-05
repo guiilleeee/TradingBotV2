@@ -2,7 +2,7 @@
 
 # Only the literal boolean `true` enables real-money trading. Anything else --
 # "true", 1, yes, a typo -- resolves to simulation. Failing safe is the point.
-live_execution: false
+live_execution: true
 
 # claude | gemini
 signal_provider: claude
@@ -38,12 +38,7 @@ min_confidence_live: 0.65
 min_confidence_simulation: 0.40
 
 symbols:
-  - symbol: AAPL
-    asset_class: equity
-  - symbol: MSFT
-    asset_class: equity
-  - symbol: NVDA
-    asset_class: equity
+  # Equities (Alpaca) deferred for now -- crypto only until that's revisited.
   # Crypto trades on Hyperliquid SPOT, unleveraged. Only symbols with a real
   # Hyperliquid spot market can be traded -- BTC, ETH and SOL have one; BNB and
   # XRP are perpetual-only there and would be refused by the spot guard.
