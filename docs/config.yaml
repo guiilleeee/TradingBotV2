@@ -34,7 +34,7 @@ min_reward_risk_ratio: 1.5
 
 # Confidence thresholds. These are read by separate code paths -- the live path
 # cannot reach the simulation value (see mode.py).
-min_confidence_live: 0.65
+min_confidence_live: 0.60
 min_confidence_simulation: 0.40
 
 symbols:
